@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A polished Flutter PDF reader.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Lumen PDF">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Lumen PDF</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    body {
+      margin: 0;
+      background: #f4f0ec;
+      color: #211d20;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    .boot {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+
+    .boot-card {
+      text-align: center;
+    }
+
+    .boot-mark {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 16px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #e94c5f;
+      color: #fffcf9;
+      font-weight: 800;
+    }
+
+    .boot-title {
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .boot-subtitle {
+      margin-top: 6px;
+      color: #756e72;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="boot" id="boot">
+    <div class="boot-card">
+      <div class="boot-mark">PDF</div>
+      <div class="boot-title">Lumen PDF</div>
+      <div class="boot-subtitle">正在启动阅读器</div>
+    </div>
+  </div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var boot = document.getElementById('boot');
+      if (boot) {
+        boot.remove();
+      }
+    });
+  </script>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

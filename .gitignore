@@ -65,7 +65,7 @@ AppData/
 LocalCache/
 
 # 其他可能存在的系统或编辑器临时文件
-*.lock
+# 注意：删除了 *.lock，以免误伤 pubspec.lock
 *.swp
 *.swo
 *~

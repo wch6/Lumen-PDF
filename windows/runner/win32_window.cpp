@@ -22,6 +22,8 @@ namespace {
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
 
+constexpr DWORD kDwmWindowCornerPreferenceDoNotRound = 1;
+constexpr DWORD kDwmWindowCornerPreferenceRound = 2;
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
 /// Registry key for app theme preference.
@@ -122,12 +124,20 @@ RECT GetMaximizedClientRect(HWND hwnd) {
   return fallback;
 }
 
+void SetWindowCornerPreference(HWND hwnd, bool rounded) {
+  DWORD corner_preference = rounded ? kDwmWindowCornerPreferenceRound
+                                    : kDwmWindowCornerPreferenceDoNotRound;
+  DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                        &corner_preference, sizeof(corner_preference));
+}
+
 void ApplyWindowShape(HWND hwnd) {
   if (!hwnd) {
     return;
   }
 
-  if (IsZoomed(hwnd) || IsIconic(hwnd)) {
+  if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+    SetWindowCornerPreference(hwnd, false);
     SetWindowRgn(hwnd, nullptr, TRUE);
     return;
   }
@@ -143,7 +153,13 @@ void ApplyWindowShape(HWND hwnd) {
   const UINT dpi = GetDpiForWindow(hwnd);
   const int radius = Scale(kWindowCornerRadius, dpi / 96.0);
   HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
-  SetWindowRgn(hwnd, region, TRUE);
+  if (region == nullptr) {
+    return;
+  }
+  SetWindowCornerPreference(hwnd, true);
+  if (SetWindowRgn(hwnd, region, TRUE) == 0) {
+    DeleteObject(region);
+  }
 }
 
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
@@ -432,10 +448,6 @@ void Win32Window::OnDestroy() {
 }
 
 void Win32Window::UpdateTheme(HWND const window) {
-  DWORD corner_preference = 2;
-  DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
-                        &corner_preference, sizeof(corner_preference));
-
   DWORD light_mode;
   DWORD light_mode_size = sizeof(light_mode);
   LSTATUS result = RegGetValue(HKEY_CURRENT_USER, kGetPreferredBrightnessRegKey,

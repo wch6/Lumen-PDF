@@ -1,39 +1,65 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../models/reader_models.dart';
+import 'app_data_paths.dart';
 
 class ReaderDatabase {
-  ReaderDatabase(this._db) {
-    _initialize();
+  ReaderDatabase(this._appDb, this._fileDb) {
+    _initializeAppCache();
+    _initializeFileData();
   }
 
   factory ReaderDatabase.inMemory() {
-    return ReaderDatabase(sqlite3.openInMemory());
+    return ReaderDatabase(sqlite3.openInMemory(), sqlite3.openInMemory());
   }
 
   static Future<ReaderDatabase> openDefault() async {
-    final supportDir = await getApplicationSupportDirectory();
-    final appDir = Directory(p.join(supportDir.path, 'pdf_reader'));
-    await appDir.create(recursive: true);
-    return ReaderDatabase(sqlite3.open(p.join(appDir.path, 'reader.sqlite')));
+    final appDir = await AppDataPaths.appDirectory();
+    return ReaderDatabase(
+      sqlite3.open(p.join(appDir.path, 'software_cache.sqlite')),
+      sqlite3.open(p.join(appDir.path, 'file_data.sqlite')),
+    );
   }
 
-  final Database _db;
+  final Database _appDb;
+  final Database _fileDb;
 
   void dispose() {
-    _db.close();
+    _appDb.close();
+    _fileDb.close();
   }
 
-  void _initialize() {
-    _db.execute('PRAGMA journal_mode = WAL;');
-    _db.execute('PRAGMA synchronous = NORMAL;');
-    _db.execute('PRAGMA foreign_keys = ON;');
-    _db.execute('''
+  void _configure(Database db) {
+    db.execute('PRAGMA journal_mode = WAL;');
+    db.execute('PRAGMA synchronous = NORMAL;');
+    db.execute('PRAGMA foreign_keys = ON;');
+  }
+
+  void _initializeAppCache() {
+    _configure(_appDb);
+    _appDb.execute('''
+CREATE TABLE IF NOT EXISTS recent_files (
+  path TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  file_hash TEXT,
+  size INTEGER,
+  last_page INTEGER NOT NULL DEFAULT 1,
+  position_json TEXT,
+  opened_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recent_files_opened_at
+  ON recent_files(opened_at DESC);
+''');
+    _ensureColumn(_appDb, 'recent_files', 'position_json', 'TEXT');
+  }
+
+  void _initializeFileData() {
+    _configure(_fileDb);
+    _fileDb.execute('''
 CREATE TABLE IF NOT EXISTS documents (
   hash TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -41,17 +67,9 @@ CREATE TABLE IF NOT EXISTS documents (
   size INTEGER,
   page_count INTEGER,
   last_page INTEGER NOT NULL DEFAULT 1,
+  position_json TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS recent_files (
-  path TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  file_hash TEXT,
-  size INTEGER,
-  last_page INTEGER NOT NULL DEFAULT 1,
-  opened_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notes (
@@ -59,6 +77,10 @@ CREATE TABLE IF NOT EXISTS notes (
   file_hash TEXT NOT NULL,
   page INTEGER NOT NULL,
   text TEXT NOT NULL,
+  x REAL,
+  y REAL,
+  highlight_id TEXT,
+  color_value INTEGER NOT NULL DEFAULT 1728046172,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY(file_hash) REFERENCES documents(hash) ON DELETE CASCADE
@@ -75,19 +97,42 @@ CREATE TABLE IF NOT EXISTS highlights (
   FOREIGN KEY(file_hash) REFERENCES documents(hash) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_recent_files_opened_at
-  ON recent_files(opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_file_hash
   ON notes(file_hash, page);
 CREATE INDEX IF NOT EXISTS idx_highlights_file_hash
   ON highlights(file_hash, page);
+CREATE INDEX IF NOT EXISTS idx_documents_updated_at
+  ON documents(updated_at DESC);
 ''');
+    _ensureColumn(_fileDb, 'documents', 'position_json', 'TEXT');
+    _ensureColumn(_fileDb, 'notes', 'x', 'REAL');
+    _ensureColumn(_fileDb, 'notes', 'y', 'REAL');
+    _ensureColumn(_fileDb, 'notes', 'highlight_id', 'TEXT');
+    _ensureColumn(
+      _fileDb,
+      'notes',
+      'color_value',
+      'INTEGER NOT NULL DEFAULT 1728046172',
+    );
+  }
+
+  void _ensureColumn(
+    Database db,
+    String table,
+    String column,
+    String declaration,
+  ) {
+    final rows = db.select('PRAGMA table_info($table);');
+    final exists = rows.any((row) => row['name'] == column);
+    if (!exists) {
+      db.execute('ALTER TABLE $table ADD COLUMN $column $declaration;');
+    }
   }
 
   Future<List<RecentDocument>> loadRecent({int limit = 8}) async {
-    final rows = _db.select(
+    final rows = _appDb.select(
       '''
-SELECT path, name, file_hash, size, last_page, opened_at
+SELECT path, name, file_hash, size, last_page, position_json, opened_at
 FROM recent_files
 ORDER BY opened_at DESC
 LIMIT ?
@@ -103,8 +148,27 @@ LIMIT ?
           page: row['last_page'] as int? ?? 1,
           openedAt: _fromMillis(row['opened_at']),
           fileHash: row['file_hash'] as String?,
+          position: ReaderPosition.tryDecode(row['position_json']),
         ),
     ];
+  }
+
+  Future<ReaderPosition?> loadDocumentPosition(String fileHash) async {
+    final rows = _fileDb.select(
+      '''
+SELECT last_page, position_json
+FROM documents
+WHERE hash = ?
+LIMIT 1
+''',
+      [fileHash],
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    final row = rows.first;
+    return ReaderPosition.tryDecode(row['position_json']) ??
+        ReaderPosition(page: row['last_page'] as int? ?? 1);
   }
 
   Future<void> recordOpen({
@@ -112,21 +176,25 @@ LIMIT ?
     required String fileHash,
     required int page,
     int? pageCount,
+    ReaderPosition? position,
   }) async {
     final now = _now();
-    _db.execute('BEGIN IMMEDIATE;');
+    final positionJson = position?.encode();
+    _fileDb.execute('BEGIN IMMEDIATE;');
+    _appDb.execute('BEGIN IMMEDIATE;');
     try {
-      _db.execute(
+      _fileDb.execute(
         '''
 INSERT INTO documents (
-  hash, name, last_path, size, page_count, last_page, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  hash, name, last_path, size, page_count, last_page, position_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(hash) DO UPDATE SET
   name = excluded.name,
   last_path = excluded.last_path,
   size = excluded.size,
   page_count = COALESCE(excluded.page_count, documents.page_count),
   last_page = excluded.last_page,
+  position_json = COALESCE(excluded.position_json, documents.position_json),
   updated_at = excluded.updated_at
 ''',
         [
@@ -136,6 +204,7 @@ ON CONFLICT(hash) DO UPDATE SET
           source.size,
           pageCount,
           page,
+          positionJson,
           now,
           now,
         ],
@@ -143,24 +212,27 @@ ON CONFLICT(hash) DO UPDATE SET
 
       final path = source.path;
       if (path != null && path.isNotEmpty) {
-        _db.execute(
+        _appDb.execute(
           '''
 INSERT INTO recent_files (
-  path, name, file_hash, size, last_page, opened_at
-) VALUES (?, ?, ?, ?, ?, ?)
+  path, name, file_hash, size, last_page, position_json, opened_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
   name = excluded.name,
   file_hash = excluded.file_hash,
   size = excluded.size,
   last_page = excluded.last_page,
+  position_json = COALESCE(excluded.position_json, recent_files.position_json),
   opened_at = excluded.opened_at
 ''',
-          [path, source.name, fileHash, source.size, page, now],
+          [path, source.name, fileHash, source.size, page, positionJson, now],
         );
       }
-      _db.execute('COMMIT;');
+      _fileDb.execute('COMMIT;');
+      _appDb.execute('COMMIT;');
     } catch (_) {
-      _db.execute('ROLLBACK;');
+      _rollback(_fileDb);
+      _rollback(_appDb);
       rethrow;
     }
   }
@@ -169,40 +241,72 @@ ON CONFLICT(path) DO UPDATE SET
     required PdfSource source,
     required int page,
     int? pageCount,
+    ReaderPosition? position,
   }) async {
     final fileHash = source.hash;
     if (fileHash == null || fileHash.isEmpty) {
       return;
     }
     final now = _now();
-    _db.execute(
+    final positionJson = position?.encode();
+    _fileDb.execute(
       '''
 UPDATE documents
-SET last_page = ?, page_count = COALESCE(?, page_count), updated_at = ?
+SET last_page = ?, page_count = COALESCE(?, page_count),
+    position_json = COALESCE(?, position_json), updated_at = ?
 WHERE hash = ?
 ''',
-      [page, pageCount, now, fileHash],
+      [page, pageCount, positionJson, now, fileHash],
     );
     final path = source.path;
     if (path != null && path.isNotEmpty) {
-      _db.execute(
+      _appDb.execute(
         '''
 UPDATE recent_files
-SET last_page = ?, opened_at = ?, file_hash = ?
+SET last_page = ?, opened_at = ?, file_hash = ?,
+    position_json = COALESCE(?, position_json)
 WHERE path = ?
 ''',
-        [page, now, fileHash, path],
+        [page, now, fileHash, positionJson, path],
       );
     }
   }
 
+  Future<List<FileDataSummary>> listFileData() async {
+    final rows = _fileDb.select('''
+SELECT hash, name, last_path, size, page_count, updated_at
+FROM documents
+ORDER BY updated_at DESC
+''');
+    return [
+      for (final row in rows)
+        FileDataSummary(
+          hash: row['hash'] as String,
+          name: row['name'] as String,
+          lastPath: row['last_path'] as String?,
+          size: row['size'] as int?,
+          pageCount: row['page_count'] as int?,
+          type: 'PDF',
+          updatedAt: _fromMillis(row['updated_at']),
+        ),
+    ];
+  }
+
+  Future<void> deleteRecent(String path) async {
+    _appDb.execute('DELETE FROM recent_files WHERE path = ?', [path]);
+  }
+
+  Future<void> clearRecent() async {
+    _appDb.execute('DELETE FROM recent_files;');
+  }
+
   Future<List<PageNote>> loadNotes(String fileHash) async {
-    final rows = _db.select(
+    final rows = _fileDb.select(
       '''
-SELECT id, page, text, created_at
+SELECT id, page, text, x, y, highlight_id, color_value, created_at, updated_at
 FROM notes
 WHERE file_hash = ?
-ORDER BY created_at DESC
+ORDER BY page ASC, y ASC, x ASC, created_at ASC
 ''',
       [fileHash],
     );
@@ -212,34 +316,45 @@ ORDER BY created_at DESC
           id: row['id'] as String,
           page: row['page'] as int? ?? 1,
           text: row['text'] as String,
+          x: (row['x'] as num?)?.toDouble(),
+          y: (row['y'] as num?)?.toDouble(),
+          highlightId: row['highlight_id'] as String?,
+          colorValue: row['color_value'] as int? ?? 0x66FFE45C,
           createdAt: _fromMillis(row['created_at']),
+          updatedAt: _fromMillis(row['updated_at']),
         ),
     ];
   }
 
   Future<void> saveNotes(String fileHash, List<PageNote> notes) async {
-    _db.execute('BEGIN IMMEDIATE;');
-    final statement = _db.prepare('''
+    _fileDb.execute('BEGIN IMMEDIATE;');
+    final statement = _fileDb.prepare('''
 INSERT INTO notes (
-  id, file_hash, page, text, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?)
+  id, file_hash, page, text, x, y, highlight_id, color_value, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ''');
     try {
-      _db.execute('DELETE FROM notes WHERE file_hash = ?', [fileHash]);
+      _fileDb.execute('DELETE FROM notes WHERE file_hash = ?', [fileHash]);
       for (final note in notes) {
         final createdAt = note.createdAt.millisecondsSinceEpoch;
+        final updatedAt =
+            (note.updatedAt ?? note.createdAt).millisecondsSinceEpoch;
         statement.execute([
           note.id,
           fileHash,
           note.page,
           note.text,
+          note.x,
+          note.y,
+          note.highlightId,
+          note.colorValue,
           createdAt,
-          createdAt,
+          updatedAt,
         ]);
       }
-      _db.execute('COMMIT;');
+      _fileDb.execute('COMMIT;');
     } catch (_) {
-      _db.execute('ROLLBACK;');
+      _rollback(_fileDb);
       rethrow;
     } finally {
       statement.close();
@@ -247,7 +362,7 @@ INSERT INTO notes (
   }
 
   Future<List<TextHighlight>> loadHighlights(String fileHash) async {
-    final rows = _db.select(
+    final rows = _fileDb.select(
       '''
 SELECT id, page, text, color_value, rects_json, created_at
 FROM highlights
@@ -262,7 +377,7 @@ ORDER BY created_at DESC
           id: row['id'] as String,
           page: row['page'] as int? ?? 1,
           text: row['text'] as String? ?? '',
-          colorValue: row['color_value'] as int? ?? 0x66FFE066,
+          colorValue: row['color_value'] as int? ?? 0x66FFE45C,
           rects: _decodeRects(row['rects_json'] as String? ?? '[]'),
           createdAt: _fromMillis(row['created_at']),
         ),
@@ -273,14 +388,14 @@ ORDER BY created_at DESC
     String fileHash,
     List<TextHighlight> highlights,
   ) async {
-    _db.execute('BEGIN IMMEDIATE;');
-    final statement = _db.prepare('''
+    _fileDb.execute('BEGIN IMMEDIATE;');
+    final statement = _fileDb.prepare('''
 INSERT INTO highlights (
   id, file_hash, page, text, color_value, rects_json, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 ''');
     try {
-      _db.execute('DELETE FROM highlights WHERE file_hash = ?', [fileHash]);
+      _fileDb.execute('DELETE FROM highlights WHERE file_hash = ?', [fileHash]);
       for (final highlight in highlights) {
         statement.execute([
           highlight.id,
@@ -292,25 +407,57 @@ INSERT INTO highlights (
           highlight.createdAt.millisecondsSinceEpoch,
         ]);
       }
-      _db.execute('COMMIT;');
+      _fileDb.execute('COMMIT;');
     } catch (_) {
-      _db.execute('ROLLBACK;');
+      _rollback(_fileDb);
       rethrow;
     } finally {
       statement.close();
     }
   }
 
-  Future<void> clearUserData() async {
-    _db.execute('BEGIN IMMEDIATE;');
+  Future<void> clearFileData() async {
+    _fileDb.execute('BEGIN IMMEDIATE;');
+    _appDb.execute('BEGIN IMMEDIATE;');
     try {
-      _db.execute('DELETE FROM highlights;');
-      _db.execute('DELETE FROM notes;');
-      _db.execute('DELETE FROM recent_files;');
-      _db.execute('DELETE FROM documents;');
-      _db.execute('COMMIT;');
+      _fileDb.execute('DELETE FROM highlights;');
+      _fileDb.execute('DELETE FROM notes;');
+      _fileDb.execute('DELETE FROM documents;');
+      _appDb.execute(
+        'UPDATE recent_files SET file_hash = NULL, last_page = 1, position_json = NULL;',
+      );
+      _fileDb.execute('COMMIT;');
+      _appDb.execute('COMMIT;');
     } catch (_) {
-      _db.execute('ROLLBACK;');
+      _rollback(_fileDb);
+      _rollback(_appDb);
+      rethrow;
+    }
+  }
+
+  Future<void> deleteFileDataByHashes(Set<String> hashes) async {
+    if (hashes.isEmpty) {
+      return;
+    }
+    final placeholders = List.filled(hashes.length, '?').join(', ');
+    final args = hashes.toList();
+    _fileDb.execute('BEGIN IMMEDIATE;');
+    _appDb.execute('BEGIN IMMEDIATE;');
+    try {
+      _fileDb.execute(
+        'DELETE FROM documents WHERE hash IN ($placeholders);',
+        args,
+      );
+      _appDb.execute('''
+UPDATE recent_files
+SET file_hash = NULL, last_page = 1, position_json = NULL
+WHERE file_hash IN ($placeholders);
+''', args);
+      _fileDb.execute('COMMIT;');
+      _appDb.execute('COMMIT;');
+    } catch (_) {
+      _rollback(_fileDb);
+      _rollback(_appDb);
       rethrow;
     }
   }
@@ -322,6 +469,12 @@ INSERT INTO highlights (
     } catch (_) {
       return const [];
     }
+  }
+
+  void _rollback(Database db) {
+    try {
+      db.execute('ROLLBACK;');
+    } catch (_) {}
   }
 
   int _now() => DateTime.now().millisecondsSinceEpoch;

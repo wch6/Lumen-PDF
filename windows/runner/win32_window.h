@@ -94,7 +94,7 @@ class Win32Window {
   static void UpdateTheme(HWND const window);
 
   bool quit_on_close_ = false;
-  int minimum_width_ = 900;
+  int minimum_width_ = 720;
   int minimum_height_ = 640;
 
   // window handle for top level window.

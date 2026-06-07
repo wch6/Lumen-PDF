@@ -20,6 +20,8 @@ class AppColors {
   static const _lightNote = Color(0xFFFFF3B8);
   static const _lightHighlight = Color(0x66FFE066);
   static const _lightSelection = Color(0x558CB8FF);
+  static const noteGlyphStroke = _lightInk;
+  static const noteFoldSurface = _lightSurface;
 
   static const _darkInk = Color(0xFFF2F2F2);
   static const _darkSubtle = Color(0xFFC6C6C6);
@@ -38,21 +40,16 @@ class AppColors {
   static const _darkSelection = Color(0x664C87D8);
 
   static const highlightPalette = <Color>[
-    Color(0x66FFE066),
-    Color(0x66FFD166),
-    Color(0x66FF9F1C),
-    Color(0x66FF6B6B),
-    Color(0x66F06595),
-    Color(0x66CC5DE8),
-    Color(0x66845EF7),
-    Color(0x665C7CFA),
-    Color(0x663390FF),
-    Color(0x6624C6DC),
-    Color(0x6620C997),
-    Color(0x6651CF66),
-    Color(0x6694D82D),
-    Color(0x66ADB5BD),
-    Color(0x66FFFFFF),
+    Color(0x66FFE45C),
+    Color(0x66FFA640),
+    Color(0x66FF6F61),
+    Color(0x66E35BA6),
+    Color(0x66A06CFF),
+    Color(0x66647BFF),
+    Color(0x664DB7FF),
+    Color(0x6639C6C6),
+    Color(0x6657C978),
+    Color(0x668F98A3),
   ];
 
   static Color ink = _lightInk;
@@ -72,6 +69,7 @@ class AppColors {
   static Color highlight = _lightHighlight;
   static Color selection = _lightSelection;
   static Color pageSeparator = _lightCanvas;
+  static Color danger = const Color(0xFFE5484D);
   static bool isNightMode = false;
 
   static void setNightMode(bool enabled) {
@@ -100,6 +98,7 @@ class AppColors {
     highlight = nightMode ? _darkHighlight : _lightHighlight;
     selection = nightMode ? _darkSelection : _lightSelection;
     pageSeparator = canvas;
+    danger = nightMode ? const Color(0xFFFF6B6B) : const Color(0xFFE5484D);
   }
 
   static (Color, Color, Color) _accentTokens(

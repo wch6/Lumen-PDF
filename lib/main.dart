@@ -7,6 +7,6 @@ export 'src/app/pdf_reader_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  pdfrxFlutterInitialize(dismissPdfiumWasmWarnings: true);
+  pdfrxFlutterInitialize();
   runApp(const PdfReaderApp());
 }

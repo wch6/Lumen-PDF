@@ -1,46 +1,52 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../assets/reader_icon_assets.dart';
 import '../models/reader_models.dart';
 import '../theme/app_colors.dart';
+import 'shortcut_tooltip.dart';
 
 class ReaderToolbarMetrics {
   const ReaderToolbarMetrics._();
 
-  static const double hideFileNameBelow = 1120;
-  static const int minimumWindowWidth = 900;
+  static const double controlHeight = 38;
+  static const double highlightSearchGap = 24;
+  static const int collapseToolbarExtrasBelow = 968;
+  static const int minimumWindowWidth = 720;
   static const int minimumWindowHeight = 640;
 }
 
 class ReaderToolbar extends StatelessWidget {
   const ReaderToolbar({
     required this.source,
-    required this.currentPage,
-    required this.pageCount,
-    required this.jumpController,
     required this.searchController,
     required this.searchFocusNode,
-    required this.nightMode,
     required this.textSearcher,
     required this.viewerController,
+    required this.shortcutBindings,
     required this.sessionTabs,
     required this.currentSourceId,
+    required this.openTabsMenuTrigger,
+    required this.closeTabsMenuTrigger,
+    required this.onOpenTabsMenuChanged,
     required this.onOpen,
     required this.onOpenTab,
+    required this.onPdfContextMenu,
     required this.onSearch,
-    required this.onJumpSubmitted,
-    required this.onPreviousPage,
-    required this.onNextPage,
+    required this.onNextSearchMatch,
+    required this.onPreviousSearchMatch,
     required this.onZoomIn,
     required this.onZoomOut,
     required this.onFitWidth,
     required this.onFitPage,
     required this.highlightColor,
+    required this.highlightColorMenuTrigger,
+    required this.onHighlightColorMenuChanged,
     required this.onHighlightColorChanged,
-    required this.onAddNote,
-    required this.onNightModeChanged,
     required this.showWindowControls,
     required this.windowMaximized,
     required this.onWindowDrag,
@@ -51,30 +57,30 @@ class ReaderToolbar extends StatelessWidget {
   });
 
   final PdfSource? source;
-  final int currentPage;
-  final int pageCount;
-  final TextEditingController jumpController;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
-  final bool nightMode;
   final PdfTextSearcher? textSearcher;
   final PdfViewerController viewerController;
+  final Map<ReaderShortcutAction, ReaderShortcutBinding> shortcutBindings;
   final List<SessionDocumentTab> sessionTabs;
   final String? currentSourceId;
+  final int openTabsMenuTrigger;
+  final int closeTabsMenuTrigger;
+  final ValueChanged<bool> onOpenTabsMenuChanged;
   final VoidCallback onOpen;
   final ValueChanged<SessionDocumentTab> onOpenTab;
+  final void Function(PdfSource source, Offset position) onPdfContextMenu;
   final ValueChanged<String> onSearch;
-  final VoidCallback onJumpSubmitted;
-  final VoidCallback onPreviousPage;
-  final VoidCallback onNextPage;
+  final VoidCallback onNextSearchMatch;
+  final VoidCallback onPreviousSearchMatch;
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
   final VoidCallback onFitWidth;
   final VoidCallback onFitPage;
   final Color highlightColor;
+  final int highlightColorMenuTrigger;
+  final ValueChanged<bool> onHighlightColorMenuChanged;
   final ValueChanged<Color> onHighlightColorChanged;
-  final VoidCallback onAddNote;
-  final ValueChanged<bool> onNightModeChanged;
   final bool showWindowControls;
   final bool windowMaximized;
   final VoidCallback onWindowDrag;
@@ -82,85 +88,41 @@ class ReaderToolbar extends StatelessWidget {
   final VoidCallback onWindowMaximizeRestore;
   final VoidCallback onWindowClose;
 
+  ReaderShortcutBinding? _shortcut(ReaderShortcutAction action) {
+    return shortcutBindings[action] ?? kDefaultShortcutBindings[action];
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hasDocument = source != null && pageCount > 0;
+    final hasDocument = source != null;
 
     Widget openButton() {
-      return Tooltip(
-        message: '打开 PDF',
+      return ShortcutTooltip(
+        label: '打开 PDF',
+        shortcut: _shortcut(ReaderShortcutAction.openFile),
         child: IconButton.filledTonal(
           onPressed: onOpen,
           style: IconButton.styleFrom(
             backgroundColor: AppColors.accentSoft,
             foregroundColor: AppColors.accent,
-            minimumSize: const Size(38, 38),
-            fixedSize: const Size(38, 38),
-            maximumSize: const Size(38, 38),
+            minimumSize: const Size(
+              ReaderToolbarMetrics.controlHeight,
+              ReaderToolbarMetrics.controlHeight,
+            ),
+            fixedSize: const Size(
+              ReaderToolbarMetrics.controlHeight,
+              ReaderToolbarMetrics.controlHeight,
+            ),
+            maximumSize: const Size(
+              ReaderToolbarMetrics.controlHeight,
+              ReaderToolbarMetrics.controlHeight,
+            ),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
             ),
           ),
           icon: Icon(Icons.folder_open_rounded),
         ),
-      );
-    }
-
-    Widget controls({required bool dense}) {
-      final gap = dense ? 4.0 : 6.0;
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SearchBox(
-            dense: dense,
-            enabled: hasDocument,
-            controller: searchController,
-            focusNode: searchFocusNode,
-            textSearcher: textSearcher,
-            onSubmitted: onSearch,
-          ),
-          SizedBox(width: gap),
-          PageStepper(
-            dense: dense,
-            controller: jumpController,
-            currentPage: currentPage,
-            pageCount: pageCount,
-            onSubmitted: onJumpSubmitted,
-            onPrevious: onPreviousPage,
-            onNext: onNextPage,
-          ),
-          SizedBox(width: gap),
-          ZoomControls(
-            dense: dense,
-            enabled: hasDocument,
-            viewerController: viewerController,
-            onZoomIn: onZoomIn,
-            onZoomOut: onZoomOut,
-            onFitWidth: onFitWidth,
-            onFitPage: onFitPage,
-          ),
-          SizedBox(width: gap),
-          HighlightColorButton(
-            selectedColor: highlightColor,
-            onSelected: onHighlightColorChanged,
-          ),
-          SizedBox(width: gap),
-          ToolbarSquareButton(
-            tooltip: '新建便签',
-            icon: Icons.add_comment_outlined,
-            onPressed: hasDocument ? onAddNote : null,
-          ),
-          SizedBox(width: gap),
-          Tooltip(
-            message: nightMode ? '切换到日间模式' : '切换到夜间模式',
-            child: Switch(
-              value: nightMode,
-              onChanged: onNightModeChanged,
-              activeThumbColor: AppColors.accent,
-              inactiveThumbColor: AppColors.subtle,
-            ),
-          ),
-        ],
       );
     }
 
@@ -200,9 +162,9 @@ class ReaderToolbar extends StatelessWidget {
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 940;
           final showFileName =
-              constraints.maxWidth >= ReaderToolbarMetrics.hideFileNameBelow;
+              constraints.maxWidth >=
+              ReaderToolbarMetrics.collapseToolbarExtrasBelow;
           final dense = !showFileName;
           final gap = dense ? 4.0 : 8.0;
 
@@ -213,9 +175,9 @@ class ReaderToolbar extends StatelessWidget {
                 Expanded(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
-                      dense || compact ? 8 : 12,
                       7,
-                      showWindowControls ? gap : (dense || compact ? 8 : 12),
+                      7,
+                      showWindowControls ? gap : (dense ? 8 : 12),
                       7,
                     ),
                     child: Row(
@@ -225,17 +187,57 @@ class ReaderToolbar extends StatelessWidget {
                         if (showFileName) ...[
                           CurrentFileNamePill(
                             source: source,
-                            width: compact ? 156 : 220,
+                            width: 220,
+                            onPdfContextMenu: onPdfContextMenu,
                           ),
                           SizedBox(width: gap),
                         ],
                         OpenTabsButton(
                           tabs: sessionTabs,
                           currentSourceId: currentSourceId,
+                          openMenuTrigger: openTabsMenuTrigger,
+                          closeMenuTrigger: closeTabsMenuTrigger,
+                          shortcut: _shortcut(
+                            ReaderShortcutAction.openRecentFiles,
+                          ),
+                          onOpenChanged: onOpenTabsMenuChanged,
                           onSelected: onOpenTab,
+                          onPdfContextMenu: onPdfContextMenu,
+                        ),
+                        SizedBox(width: gap),
+                        ZoomControls(
+                          dense: dense,
+                          enabled: hasDocument,
+                          viewerController: viewerController,
+                          onZoomIn: onZoomIn,
+                          onZoomOut: onZoomOut,
+                          onFitWidth: onFitWidth,
+                          onFitPage: onFitPage,
+                          fitWidthShortcut: _shortcut(
+                            ReaderShortcutAction.fitWidth,
+                          ),
+                          fitPageShortcut: _shortcut(
+                            ReaderShortcutAction.fitPage,
+                          ),
+                        ),
+                        SizedBox(width: gap),
+                        HighlightColorButton(
+                          selectedColor: highlightColor,
+                          openMenuTrigger: highlightColorMenuTrigger,
+                          shortcut: _shortcut(
+                            ReaderShortcutAction.selectHighlightColor,
+                          ),
+                          onOpenChanged: onHighlightColorMenuChanged,
+                          onSelected: onHighlightColorChanged,
+                        ),
+                        Expanded(
+                          child: WindowDragRegion(
+                            onDrag: onWindowDrag,
+                            onDoubleTap: onWindowMaximizeRestore,
+                          ),
                         ),
                         SizedBox(
-                          width: gap,
+                          width: ReaderToolbarMetrics.highlightSearchGap,
                           child: showWindowControls
                               ? WindowDragRegion(
                                   onDrag: onWindowDrag,
@@ -243,23 +245,16 @@ class ReaderToolbar extends StatelessWidget {
                                 )
                               : null,
                         ),
-                        if (compact) ...[
-                          Expanded(
-                            child: WindowDragRegion(
-                              onDrag: onWindowDrag,
-                              onDoubleTap: onWindowMaximizeRestore,
-                            ),
-                          ),
-                          controls(dense: dense),
-                        ] else ...[
-                          Expanded(
-                            child: WindowDragRegion(
-                              onDrag: onWindowDrag,
-                              onDoubleTap: onWindowMaximizeRestore,
-                            ),
-                          ),
-                          controls(dense: dense),
-                        ],
+                        SearchBox(
+                          dense: dense,
+                          enabled: hasDocument,
+                          controller: searchController,
+                          focusNode: searchFocusNode,
+                          textSearcher: textSearcher,
+                          onSubmitted: onSearch,
+                          onNextMatch: onNextSearchMatch,
+                          onPreviousMatch: onPreviousSearchMatch,
+                        ),
                       ],
                     ),
                   ),
@@ -278,11 +273,13 @@ class CurrentFileNamePill extends StatelessWidget {
   const CurrentFileNamePill({
     required this.source,
     required this.width,
+    required this.onPdfContextMenu,
     super.key,
   });
 
   final PdfSource? source;
   final double width;
+  final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -291,24 +288,29 @@ class CurrentFileNamePill extends StatelessWidget {
     final active = source != null;
     return Tooltip(
       message: path,
-      child: Container(
-        width: width,
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        alignment: Alignment.centerLeft,
-        decoration: BoxDecoration(
-          color: active ? AppColors.accentSoft : AppColors.toolbarItem,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.line),
-        ),
-        child: Text(
-          name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: active ? AppColors.accent : AppColors.subtle,
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
+      child: GestureDetector(
+        onSecondaryTapDown: active
+            ? (details) => onPdfContextMenu(source!, details.globalPosition)
+            : null,
+        child: Container(
+          width: width,
+          height: ReaderToolbarMetrics.controlHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.centerLeft,
+          decoration: BoxDecoration(
+            color: active ? AppColors.accentSoft : AppColors.toolbarItem,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.line),
+          ),
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: active ? AppColors.accent : AppColors.subtle,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -320,13 +322,23 @@ class OpenTabsButton extends StatefulWidget {
   const OpenTabsButton({
     required this.tabs,
     required this.currentSourceId,
+    required this.openMenuTrigger,
+    required this.closeMenuTrigger,
+    required this.shortcut,
+    required this.onOpenChanged,
     required this.onSelected,
+    required this.onPdfContextMenu,
     super.key,
   });
 
   final List<SessionDocumentTab> tabs;
   final String? currentSourceId;
+  final int openMenuTrigger;
+  final int closeMenuTrigger;
+  final ReaderShortcutBinding? shortcut;
+  final ValueChanged<bool> onOpenChanged;
   final ValueChanged<SessionDocumentTab> onSelected;
+  final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   State<OpenTabsButton> createState() => _OpenTabsButtonState();
@@ -336,6 +348,17 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
   final _menuController = MenuController();
 
   @override
+  void didUpdateWidget(covariant OpenTabsButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.openMenuTrigger != widget.openMenuTrigger) {
+      _menuController.open();
+    }
+    if (oldWidget.closeMenuTrigger != widget.closeMenuTrigger) {
+      _menuController.close();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final menuWidth = math.min(
       420.0,
@@ -343,6 +366,8 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
     );
     return MenuAnchor(
       controller: _menuController,
+      onOpen: () => widget.onOpenChanged(true),
+      onClose: () => widget.onOpenChanged(false),
       style: MenuStyle(
         backgroundColor: WidgetStatePropertyAll(AppColors.surface),
         elevation: const WidgetStatePropertyAll(10),
@@ -365,12 +390,14 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
               widget.onSelected(tab);
               _menuController.close();
             },
+            onPdfContextMenu: widget.onPdfContextMenu,
           ),
         ),
       ],
       builder: (context, controller, _) {
-        return Tooltip(
-          message: '切换本次打开的文件',
+        return ShortcutTooltip(
+          label: '最近文件',
+          shortcut: widget.shortcut,
           child: IconButton.filledTonal(
             onPressed: () {
               if (controller.isOpen) {
@@ -382,9 +409,18 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
             style: IconButton.styleFrom(
               backgroundColor: AppColors.accentSoft,
               foregroundColor: AppColors.accent,
-              minimumSize: const Size(38, 38),
-              fixedSize: const Size(38, 38),
-              maximumSize: const Size(38, 38),
+              minimumSize: const Size(
+                ReaderToolbarMetrics.controlHeight,
+                ReaderToolbarMetrics.controlHeight,
+              ),
+              fixedSize: const Size(
+                ReaderToolbarMetrics.controlHeight,
+                ReaderToolbarMetrics.controlHeight,
+              ),
+              maximumSize: const Size(
+                ReaderToolbarMetrics.controlHeight,
+                ReaderToolbarMetrics.controlHeight,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -402,11 +438,13 @@ class _OpenTabsMenu extends StatelessWidget {
     required this.tabs,
     required this.currentSourceId,
     required this.onSelected,
+    required this.onPdfContextMenu,
   });
 
   final List<SessionDocumentTab> tabs;
   final String? currentSourceId;
   final ValueChanged<SessionDocumentTab> onSelected;
+  final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -421,7 +459,7 @@ class _OpenTabsMenu extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '打开的标签页',
+              '最近打开的文件',
               style: TextStyle(
                 color: AppColors.ink,
                 fontSize: 18,
@@ -463,8 +501,10 @@ class _OpenTabsMenu extends StatelessWidget {
                       constraints: BoxConstraints(maxWidth: tooltipMaxWidth),
                       child: _OpenTabTile(
                         tab: tab,
+                        shortcutIndex: index + 1,
                         selected: tab.source.id == currentSourceId,
                         onTap: () => onSelected(tab),
+                        onPdfContextMenu: onPdfContextMenu,
                       ),
                     );
                   },
@@ -480,18 +520,24 @@ class _OpenTabsMenu extends StatelessWidget {
 class _OpenTabTile extends StatelessWidget {
   const _OpenTabTile({
     required this.tab,
+    required this.shortcutIndex,
     required this.selected,
     required this.onTap,
+    required this.onPdfContextMenu,
   });
 
   final SessionDocumentTab tab;
+  final int shortcutIndex;
   final bool selected;
   final VoidCallback onTap;
+  final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: selected ? null : onTap,
+      onSecondaryTapDown: (details) =>
+          onPdfContextMenu(tab.source, details.globalPosition),
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.all(10),
@@ -544,50 +590,21 @@ class _OpenTabTile extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(width: 8),
+            Text(
+              'Ctrl+$shortcutIndex',
+              style: TextStyle(
+                color: selected ? AppColors.accent : AppColors.subtle,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
             if (selected) ...[
               const SizedBox(width: 8),
               Icon(Icons.check_rounded, color: AppColors.accent, size: 20),
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-class ToolbarSquareButton extends StatelessWidget {
-  const ToolbarSquareButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-    super.key,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: IconButton(
-        onPressed: onPressed,
-        iconSize: 18,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-        style: IconButton.styleFrom(
-          backgroundColor: AppColors.toolbarItem,
-          foregroundColor: AppColors.ink,
-          disabledForegroundColor: AppColors.subtle.withValues(alpha: 0.38),
-          side: BorderSide(color: AppColors.line),
-          minimumSize: const Size(34, 34),
-          fixedSize: const Size(34, 34),
-          maximumSize: const Size(34, 34),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-        icon: Icon(icon),
       ),
     );
   }
@@ -679,11 +696,17 @@ class WindowChromeButton extends StatelessWidget {
 class HighlightColorButton extends StatefulWidget {
   const HighlightColorButton({
     required this.selectedColor,
+    required this.openMenuTrigger,
+    required this.shortcut,
+    required this.onOpenChanged,
     required this.onSelected,
     super.key,
   });
 
   final Color selectedColor;
+  final int openMenuTrigger;
+  final ReaderShortcutBinding? shortcut;
+  final ValueChanged<bool> onOpenChanged;
   final ValueChanged<Color> onSelected;
 
   @override
@@ -691,78 +714,191 @@ class HighlightColorButton extends StatefulWidget {
 }
 
 class _HighlightColorButtonState extends State<HighlightColorButton> {
+  static const int _columns = 5;
+
   final _menuController = MenuController();
+  final _focusNode = FocusNode();
+  int _highlightedIndex = 0;
+  bool _menuOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _highlightedIndex = _selectedColorIndex();
+  }
+
+  @override
+  void didUpdateWidget(covariant HighlightColorButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedColor.toARGB32() != widget.selectedColor.toARGB32() &&
+        !_menuOpen) {
+      _highlightedIndex = _selectedColorIndex();
+    }
+    if (oldWidget.openMenuTrigger != widget.openMenuTrigger) {
+      _openMenu();
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  int _selectedColorIndex() {
+    final selected = widget.selectedColor.toARGB32();
+    final index = AppColors.highlightPalette.indexWhere(
+      (color) => color.toARGB32() == selected,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  int _clampColorIndex(int index) {
+    return index.clamp(0, AppColors.highlightPalette.length - 1).toInt();
+  }
+
+  void _openMenu() {
+    setState(() {
+      _menuOpen = true;
+      _highlightedIndex = _selectedColorIndex();
+    });
+    _menuController.open();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+      }
+    });
+  }
+
+  void _closeMenu() {
+    _menuController.close();
+  }
+
+  void _commitHighlightedColor() {
+    final colors = AppColors.highlightPalette;
+    if (_highlightedIndex < 0 || _highlightedIndex >= colors.length) {
+      return;
+    }
+    widget.onSelected(colors[_highlightedIndex]);
+    _closeMenu();
+  }
+
+  KeyEventResult _handleColorKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.handled;
+    }
+
+    int? nextIndex;
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      nextIndex = _clampColorIndex(_highlightedIndex + 1);
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      nextIndex = _clampColorIndex(_highlightedIndex - 1);
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      nextIndex = _clampColorIndex(_highlightedIndex + _columns);
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      nextIndex = _clampColorIndex(_highlightedIndex - _columns);
+    } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+      _commitHighlightedColor();
+      return KeyEventResult.handled;
+    } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _closeMenu();
+      return KeyEventResult.handled;
+    }
+
+    if (nextIndex != null) {
+      setState(() => _highlightedIndex = nextIndex!);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   @override
   Widget build(BuildContext context) {
     return MenuAnchor(
       controller: _menuController,
+      onOpen: () {
+        widget.onOpenChanged(true);
+        setState(() {
+          _menuOpen = true;
+          _highlightedIndex = _selectedColorIndex();
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _focusNode.requestFocus();
+          }
+        });
+      },
+      onClose: () {
+        widget.onOpenChanged(false);
+        if (mounted) {
+          setState(() {
+            _menuOpen = false;
+            _highlightedIndex = _selectedColorIndex();
+          });
+        }
+      },
       menuChildren: [
-        Padding(
-          padding: const EdgeInsets.all(10),
-          child: SizedBox(
-            width: 178,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final color in AppColors.highlightPalette)
-                  _HighlightSwatch(
-                    color: color,
-                    selected:
-                        color.toARGB32() == widget.selectedColor.toARGB32(),
-                    onTap: () {
-                      widget.onSelected(color);
-                      _menuController.close();
-                    },
-                  ),
-              ],
+        Focus(
+          focusNode: _focusNode,
+          onKeyEvent: _handleColorKey,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: SizedBox(
+              width: 178,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (
+                    var index = 0;
+                    index < AppColors.highlightPalette.length;
+                    index++
+                  )
+                    _HighlightSwatch(
+                      color: AppColors.highlightPalette[index],
+                      selected: index == _highlightedIndex,
+                      committed:
+                          AppColors.highlightPalette[index].toARGB32() ==
+                          widget.selectedColor.toARGB32(),
+                      onTap: () {
+                        widget.onSelected(AppColors.highlightPalette[index]);
+                        _menuController.close();
+                      },
+                    ),
+                ],
+              ),
             ),
           ),
         ),
       ],
       builder: (context, controller, _) {
-        return Tooltip(
-          message: '选择高亮颜色',
-          child: IconButton(
-            onPressed: () {
+        final solidColor = widget.selectedColor.withValues(alpha: 1);
+        return ShortcutTooltip(
+          label: '高亮颜色',
+          shortcut: widget.shortcut,
+          child: InkWell(
+            onTap: () {
               if (controller.isOpen) {
                 controller.close();
               } else {
-                controller.open();
+                _openMenu();
               }
             },
-            iconSize: 19,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-            style: IconButton.styleFrom(
-              backgroundColor: AppColors.toolbarItem,
-              foregroundColor: AppColors.ink,
-              side: BorderSide(color: AppColors.line),
-              minimumSize: const Size(34, 34),
-              fixedSize: const Size(34, 34),
-              maximumSize: const Size(34, 34),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            icon: Stack(
-              alignment: Alignment.center,
-              children: [
-                const Icon(Icons.format_color_fill_rounded),
-                Positioned(
-                  bottom: 2,
-                  child: Container(
-                    width: 18,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: widget.selectedColor.withValues(alpha: 1),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: ReaderToolbarMetrics.controlHeight,
+              height: ReaderToolbarMetrics.controlHeight,
+              child: Center(
+                child: Container(
+                  width: ReaderToolbarMetrics.controlHeight - 4,
+                  height: ReaderToolbarMetrics.controlHeight - 4,
+                  decoration: BoxDecoration(
+                    color: solidColor,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.accent, width: 3),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         );
@@ -775,11 +911,13 @@ class _HighlightSwatch extends StatelessWidget {
   const _HighlightSwatch({
     required this.color,
     required this.selected,
+    required this.committed,
     required this.onTap,
   });
 
   final Color color;
   final bool selected;
+  final bool committed;
   final VoidCallback onTap;
 
   @override
@@ -801,7 +939,7 @@ class _HighlightSwatch extends StatelessWidget {
               width: selected ? 2 : 1,
             ),
           ),
-          child: selected
+          child: committed
               ? Icon(Icons.check_rounded, size: 17, color: AppColors.ink)
               : null,
         ),
@@ -818,6 +956,8 @@ class SearchBox extends StatelessWidget {
     required this.focusNode,
     required this.textSearcher,
     required this.onSubmitted,
+    required this.onNextMatch,
+    required this.onPreviousMatch,
     super.key,
   });
 
@@ -827,45 +967,133 @@ class SearchBox extends StatelessWidget {
   final FocusNode focusNode;
   final PdfTextSearcher? textSearcher;
   final ValueChanged<String> onSubmitted;
+  final VoidCallback onNextMatch;
+  final VoidCallback onPreviousMatch;
 
   @override
   Widget build(BuildContext context) {
+    bool hasActiveQuery() {
+      final query = controller.text.trim();
+      final pattern = textSearcher?.pattern;
+      return query.isNotEmpty &&
+          pattern is String &&
+          pattern.toLowerCase() == query.toLowerCase();
+    }
+
+    void submitSearch() {
+      final query = controller.text.trim();
+      if (query.isEmpty) {
+        controller.clear();
+        return;
+      }
+      onSubmitted(query);
+    }
+
+    void submitOrNextMatch() {
+      if (hasActiveQuery() && (textSearcher?.matches.isNotEmpty ?? false)) {
+        onNextMatch();
+        return;
+      }
+      submitSearch();
+    }
+
+    void submitOrPreviousMatch() {
+      if (hasActiveQuery() && (textSearcher?.matches.isNotEmpty ?? false)) {
+        onPreviousMatch();
+        return;
+      }
+      submitSearch();
+    }
+
     return SizedBox(
-      width: dense ? 150 : 180,
-      height: 34,
-      child: TextField(
-        controller: controller,
-        focusNode: focusNode,
-        enabled: enabled,
-        onSubmitted: enabled ? onSubmitted : null,
-        textInputAction: TextInputAction.search,
-        decoration: InputDecoration(
-          hintText: '搜索内容',
-          prefixIcon: Icon(Icons.search_rounded, size: 18),
-          suffixIcon: enabled && textSearcher?.isSearching == true
-              ? const Padding(
-                  padding: EdgeInsets.all(11),
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : IconButton(
-                  tooltip: '执行搜索',
-                  onPressed: enabled
-                      ? () => onSubmitted(controller.text)
-                      : null,
-                  icon: Icon(Icons.arrow_forward_rounded, size: 18),
+      width: dense ? 210 : 260,
+      height: ReaderToolbarMetrics.controlHeight,
+      child: Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          Focus(
+            canRequestFocus: false,
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  enabled &&
+                  event.logicalKey == LogicalKeyboardKey.enter &&
+                  HardwareKeyboard.instance.isControlPressed) {
+                submitOrPreviousMatch();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              enabled: enabled,
+              onSubmitted: enabled
+                  ? (_) {
+                      if (HardwareKeyboard.instance.isControlPressed) {
+                        submitOrPreviousMatch();
+                        return;
+                      }
+                      submitOrNextMatch();
+                    }
+                  : null,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                suffixIcon: enabled && textSearcher?.isSearching == true
+                    ? const Padding(
+                        padding: EdgeInsets.all(11),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : IconButton(
+                        tooltip: '执行搜索',
+                        onPressed: enabled ? submitSearch : null,
+                        icon: Icon(Icons.arrow_forward_rounded, size: 18),
+                      ),
+                suffixIconConstraints: const BoxConstraints.tightFor(
+                  width: 38,
+                  height: ReaderToolbarMetrics.controlHeight,
                 ),
-          filled: true,
-          fillColor: AppColors.toolbarItem,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: AppColors.line),
+                filled: true,
+                fillColor: AppColors.toolbarItem,
+                contentPadding: const EdgeInsets.fromLTRB(14, 0, 42, 0),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AppColors.line),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AppColors.line),
+                ),
+              ),
+            ),
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: AppColors.line),
+          IgnorePointer(
+            child: AnimatedBuilder(
+              animation: Listenable.merge([controller, focusNode]),
+              builder: (context, _) {
+                if (controller.text.isNotEmpty || focusNode.hasFocus) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(left: 14, right: 42),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.search_rounded,
+                        size: 18,
+                        color: AppColors.subtle,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '搜索内容',
+                        style: TextStyle(color: AppColors.subtle, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -880,6 +1108,8 @@ class PageStepper extends StatelessWidget {
     required this.onSubmitted,
     required this.onPrevious,
     required this.onNext,
+    this.narrow = false,
+    this.width,
     super.key,
   });
 
@@ -890,11 +1120,45 @@ class PageStepper extends StatelessWidget {
   final VoidCallback onSubmitted;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
+  final bool narrow;
+  final double? width;
 
   @override
   Widget build(BuildContext context) {
     final enabled = pageCount > 0;
+    final buttonSize = narrow ? 30.0 : 34.0;
+    final fieldWidth = narrow ? 30.0 : (dense ? 42.0 : 48.0);
+    final numberGroup = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: fieldWidth,
+          child: TextField(
+            controller: controller,
+            enabled: enabled,
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            onSubmitted: (_) => onSubmitted(),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          ),
+        ),
+        Text(
+          '/ ${pageCount == 0 ? '-' : pageCount}',
+          style: TextStyle(
+            color: AppColors.subtle,
+            fontSize: narrow ? 11.5 : 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
     return Container(
+      width: width,
       height: 34,
       decoration: BoxDecoration(
         color: AppColors.toolbarItem,
@@ -902,43 +1166,62 @@ class PageStepper extends StatelessWidget {
         border: Border.all(color: AppColors.line),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: width == null ? MainAxisSize.min : MainAxisSize.max,
         children: [
-          ToolbarIconButton(
+          _PageStepperArrow(
             tooltip: '上一页',
             icon: Icons.keyboard_arrow_left_rounded,
+            size: buttonSize,
             onPressed: enabled && currentPage > 1 ? onPrevious : null,
           ),
-          SizedBox(
-            width: dense ? 42 : 48,
-            child: TextField(
-              controller: controller,
-              enabled: enabled,
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              onSubmitted: (_) => onSubmitted(),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-            ),
-          ),
-          Text(
-            '/ ${pageCount == 0 ? '-' : pageCount}',
-            style: TextStyle(
-              color: AppColors.subtle,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          ToolbarIconButton(
+          if (width == null)
+            numberGroup
+          else
+            Expanded(child: Center(child: numberGroup)),
+          _PageStepperArrow(
             tooltip: '下一页',
             icon: Icons.keyboard_arrow_right_rounded,
+            size: buttonSize,
             onPressed: enabled && currentPage < pageCount ? onNext : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PageStepperArrow extends StatelessWidget {
+  const _PageStepperArrow({
+    required this.tooltip,
+    required this.icon,
+    required this.size,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final double size;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: onPressed,
+        iconSize: 19,
+        padding: EdgeInsets.zero,
+        constraints: BoxConstraints.tightFor(width: size, height: 34),
+        style: IconButton.styleFrom(
+          foregroundColor: AppColors.ink,
+          disabledForegroundColor: AppColors.subtle.withValues(alpha: 0.38),
+          minimumSize: Size(size, 34),
+          fixedSize: Size(size, 34),
+          maximumSize: Size(size, 34),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        icon: Icon(icon),
       ),
     );
   }
@@ -953,6 +1236,8 @@ class ZoomControls extends StatelessWidget {
     required this.onZoomOut,
     required this.onFitWidth,
     required this.onFitPage,
+    required this.fitWidthShortcut,
+    required this.fitPageShortcut,
     super.key,
   });
 
@@ -963,12 +1248,14 @@ class ZoomControls extends StatelessWidget {
   final VoidCallback onZoomOut;
   final VoidCallback onFitWidth;
   final VoidCallback onFitPage;
+  final ReaderShortcutBinding? fitWidthShortcut;
+  final ReaderShortcutBinding? fitPageShortcut;
 
   @override
   Widget build(BuildContext context) {
     if (!enabled) {
       return Container(
-        height: 34,
+        height: ReaderToolbarMetrics.controlHeight,
         decoration: BoxDecoration(
           color: AppColors.toolbarItem,
           borderRadius: BorderRadius.circular(8),
@@ -1001,12 +1288,16 @@ class ZoomControls extends StatelessWidget {
             ),
             ToolbarIconButton(
               tooltip: '适合宽度',
-              icon: Icons.width_normal_rounded,
+              svgAsset: ReaderIconAssets.fitWidth,
+              iconSize: 25,
+              shortcut: fitWidthShortcut,
               onPressed: null,
             ),
             ToolbarIconButton(
               tooltip: '适合页面',
-              icon: Icons.fit_screen_rounded,
+              svgAsset: ReaderIconAssets.fitPage,
+              iconSize: 25,
+              shortcut: fitPageShortcut,
               onPressed: null,
             ),
           ],
@@ -1015,7 +1306,7 @@ class ZoomControls extends StatelessWidget {
     }
 
     return Container(
-      height: 34,
+      height: ReaderToolbarMetrics.controlHeight,
       decoration: BoxDecoration(
         color: AppColors.toolbarItem,
         borderRadius: BorderRadius.circular(8),
@@ -1052,12 +1343,16 @@ class ZoomControls extends StatelessWidget {
               ),
               ToolbarIconButton(
                 tooltip: '适合宽度',
-                icon: Icons.width_normal_rounded,
+                svgAsset: ReaderIconAssets.fitWidth,
+                iconSize: 25,
+                shortcut: fitWidthShortcut,
                 onPressed: onFitWidth,
               ),
               ToolbarIconButton(
                 tooltip: '适合页面',
-                icon: Icons.fit_screen_rounded,
+                svgAsset: ReaderIconAssets.fitPage,
+                iconSize: 25,
+                shortcut: fitPageShortcut,
                 onPressed: onFitPage,
               ),
             ],
@@ -1071,35 +1366,86 @@ class ZoomControls extends StatelessWidget {
 class ToolbarIconButton extends StatelessWidget {
   const ToolbarIconButton({
     required this.tooltip,
-    required this.icon,
     required this.onPressed,
+    this.icon,
+    this.svgAsset,
+    this.iconSize = 19,
+    this.shortcut,
     super.key,
-  });
+  }) : assert(icon != null || svgAsset != null);
 
   final String tooltip;
-  final IconData icon;
+  final IconData? icon;
+  final String? svgAsset;
+  final double iconSize;
+  final ReaderShortcutBinding? shortcut;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
+    final foregroundColor = onPressed == null
+        ? AppColors.subtle.withValues(alpha: 0.38)
+        : AppColors.ink;
+    return ShortcutTooltip(
+      label: tooltip,
+      shortcut: shortcut,
       child: IconButton(
         onPressed: onPressed,
-        iconSize: 19,
+        iconSize: iconSize,
         padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+        constraints: const BoxConstraints.tightFor(
+          width: ReaderToolbarMetrics.controlHeight,
+          height: ReaderToolbarMetrics.controlHeight,
+        ),
         style: IconButton.styleFrom(
           foregroundColor: AppColors.ink,
           disabledForegroundColor: AppColors.subtle.withValues(alpha: 0.38),
-          minimumSize: const Size(34, 34),
-          fixedSize: const Size(34, 34),
-          maximumSize: const Size(34, 34),
+          minimumSize: const Size(
+            ReaderToolbarMetrics.controlHeight,
+            ReaderToolbarMetrics.controlHeight,
+          ),
+          fixedSize: const Size(
+            ReaderToolbarMetrics.controlHeight,
+            ReaderToolbarMetrics.controlHeight,
+          ),
+          maximumSize: const Size(
+            ReaderToolbarMetrics.controlHeight,
+            ReaderToolbarMetrics.controlHeight,
+          ),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
-        icon: Icon(icon),
+        icon: svgAsset == null
+            ? Icon(icon)
+            : ReaderSvgIcon(
+                assetName: svgAsset!,
+                color: foregroundColor,
+                size: iconSize,
+              ),
       ),
+    );
+  }
+}
+
+class ReaderSvgIcon extends StatelessWidget {
+  const ReaderSvgIcon({
+    required this.assetName,
+    required this.color,
+    this.size = 19,
+    super.key,
+  });
+
+  final String assetName;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SvgPicture.asset(
+      assetName,
+      width: size,
+      height: size,
+      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
     );
   }
 }

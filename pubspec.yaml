@@ -33,20 +33,20 @@ dependencies:
 
   file_picker: ^11.0.2
   crypto: ^3.0.7
-  image: ^4.8.0
+  image: 4.9.1
   path: ^1.9.1
   path_provider: ^2.1.5
-  pdfrx: ^2.3.4
-  shared_preferences: ^2.5.5
-  sqlite3: ^3.3.1
+  pdfrx: 2.4.3
+  sqlite3: 3.3.2
   url_launcher: ^6.3.2
   vector_math: ^2.2.0
+  pointycastle: ^4.0.0
+  audioplayers: ^6.7.0
+  flutter_svg: ^2.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  shared_preferences_platform_interface: ^2.4.2
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -67,9 +67,8 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/icons/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

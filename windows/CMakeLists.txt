@@ -1,10 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(pdf_reader LANGUAGES CXX)
+project(lumen LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "pdf_reader")
+set(BINARY_NAME "lumen")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -101,6 +101,28 @@ install(CODE "
   " COMPONENT Runtime)
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
+
+# Source icons live under assets/icons with the rest of the project assets, but
+# the release bundle keeps them at flutter_assets/icons.
+install(CODE "
+  execute_process(
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+      -File \"${CMAKE_CURRENT_SOURCE_DIR}/scripts/normalize_flutter_assets.ps1\"
+      \"${INSTALL_BUNDLE_DATA_DIR}/${FLUTTER_ASSET_DIR_NAME}\"
+    RESULT_VARIABLE LUMEN_ASSET_NORMALIZE_RESULT
+  )
+  if(NOT LUMEN_ASSET_NORMALIZE_RESULT EQUAL 0)
+    message(FATAL_ERROR \"Unable to normalize flutter_assets icon layout.\")
+  endif()
+  " COMPONENT Runtime)
+
+# Project font source files live under assets/fonts but are not bundled by
+# default. Flutter already packages declared app fonts and Material icons into
+# flutter_assets, while the UI uses system font families. Keep this cleanup so
+# older install directories do not retain the previously copied fonts folder.
+install(CODE "
+  file(REMOVE_RECURSE \"${INSTALL_BUNDLE_LIB_DIR}/fonts\")
+  " COMPONENT Runtime)
 
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

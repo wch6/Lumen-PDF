@@ -8,12 +8,16 @@ class OpenedPdfState {
     required this.recent,
     required this.notes,
     required this.highlights,
+    required this.page,
+    this.position,
   });
 
   final PdfSource source;
   final List<RecentDocument> recent;
   final List<PageNote> notes;
   final List<TextHighlight> highlights;
+  final int page;
+  final ReaderPosition? position;
 }
 
 class ReaderRepository {
@@ -41,20 +45,27 @@ class ReaderRepository {
     PdfSource source, {
     required int initialPage,
     int? pageCount,
+    ReaderPosition? position,
   }) async {
     final fileHash = await hashService.hashSource(source);
     final resolved = source.copyWith(hash: fileHash);
+    final storedPosition = await database.loadDocumentPosition(fileHash);
+    final effectivePosition = position ?? storedPosition;
+    final effectivePage = effectivePosition?.page ?? initialPage;
     await database.recordOpen(
       source: resolved,
       fileHash: fileHash,
-      page: initialPage,
+      page: effectivePage,
       pageCount: pageCount,
+      position: effectivePosition,
     );
     return OpenedPdfState(
       source: resolved,
       recent: await database.loadRecent(),
       notes: await database.loadNotes(fileHash),
       highlights: await database.loadHighlights(fileHash),
+      page: effectivePage,
+      position: effectivePosition,
     );
   }
 
@@ -62,11 +73,13 @@ class ReaderRepository {
     PdfSource source, {
     required int page,
     int? pageCount,
+    ReaderPosition? position,
   }) {
     return database.updateReadPosition(
       source: source,
       page: page,
       pageCount: pageCount,
+      position: position,
     );
   }
 
@@ -89,7 +102,15 @@ class ReaderRepository {
     return database.saveHighlights(hash, highlights);
   }
 
-  Future<void> clearUserData() {
-    return database.clearUserData();
+  Future<void> deleteRecent(String path) => database.deleteRecent(path);
+
+  Future<void> clearRecent() => database.clearRecent();
+
+  Future<List<FileDataSummary>> listFileData() => database.listFileData();
+
+  Future<void> clearFileData() => database.clearFileData();
+
+  Future<void> deleteFileDataByHashes(Set<String> hashes) {
+    return database.deleteFileDataByHashes(hashes);
   }
 }

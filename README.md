@@ -7,6 +7,7 @@ Lumen PDF 是一个 Windows-first 的 Flutter PDF 阅读器。它面向长时间
 ## 功能概览
 
 - 打开本地 PDF，支持拖入 Windows 窗口，恢复最近阅读页和视口位置。
+- 支持把 PDF 文件拖到 Lumen PDF 快捷方式或 `lumen.exe` 上启动打开。
 - 使用 `pdfrx` 连续渲染 PDF，支持适合宽度、适合页面、缩放、PDF 内部链接和外部 URL。
 - 左侧工具栏和可折叠侧栏提供资料库、缩略图、目录、搜索结果、笔记和翻译结果。
 - 全文搜索支持结果列表、上下命中跳转和阅读区高亮。
@@ -76,6 +77,91 @@ build\windows\x64\runner\Release\lumen.exe
 
 Windows 桌面构建通常需要开启 Developer Mode，因为 Flutter 插件构建可能使用符号链接。
 
+Windows release 目录是一个完整可运行的绿色包，包含 `lumen.exe`、Flutter 运行库、PDFium、SQLite、插件 DLL 和 `data` 目录。复制整个 `Release` 文件夹到其他电脑也可以运行，但更推荐使用下面的安装器流程。
+
+## 构建安装器
+
+项目内置一个 Windows 安装器构建脚本，基于 Inno Setup 6。当前本机 Inno Setup 编译器路径为 `D:\Inno_Setup_6\ISCC.exe`，脚本也会尝试从 PATH、注册表和常见安装目录自动查找 `ISCC.exe`。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build_installer.ps1
+```
+
+默认会先执行 `flutter build windows --release`，再调用 `ISCC.exe` 编译 Inno Setup 脚本：
+
+```text
+installer\lumen_pdf.iss
+```
+
+最终生成：
+
+```text
+build\installer\dist\LumenPDF-Setup-1.0.0.exe
+```
+
+安装器会把当前 Windows release 包完整打进去，目标电脑不需要安装 Flutter SDK、Dart SDK、Visual Studio 或 Inno Setup。
+
+### 安装器行为
+
+- 支持 Windows 10 及以上 x64/x64-compatible 系统。
+- 安装向导会显示安装目录选择页，默认位置为 `{autopf}\Lumen PDF`。
+- 用户可以在向导中改成任意可写目录。
+- 安装过程会创建开始菜单快捷方式。
+- 桌面快捷方式由用户在向导里选择。
+- 安装完成后可以直接启动 Lumen PDF。
+- 卸载项会显示在 Windows 设置的应用列表中。
+
+### 卸载和数据清理
+
+Inno Setup 会在安装目录生成标准卸载器，并注册到 Windows 设置中。交互式卸载时，卸载程序会询问是否同时删除 Lumen PDF 产生的所有用户数据和缓存。
+
+用户选择删除后，会清理：
+
+- `%LOCALAPPDATA%\LumenPDF`
+- 旧版本可能留下的 `%LOCALAPPDATA%\PDFReader`
+- 旧版本可能留下的 `%LOCALAPPDATA%\pdf_reader`
+- 旧版本可能留下的 `%LOCALAPPDATA%\com.codex\pdf_reader\pdf_reader`
+- 旧版本可能留下的 `%APPDATA%\pdf_reader`
+- 旧版本可能留下的 `%APPDATA%\com.codex\pdf_reader\pdf_reader`
+
+这些目录包含设置、最近文件、阅读位置、便签、高亮、本地缓存数据库和迁移残留数据。原始 PDF 文件不会被删除。静默卸载不会删除用户数据。
+
+常用参数：
+
+```powershell
+# 使用指定版本名
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build_installer.ps1 -BuildName 1.0.1
+
+# release 包已经是最新时跳过 Flutter 构建
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build_installer.ps1 -SkipFlutterBuild
+
+# 指定 Inno Setup 编译器位置
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build_installer.ps1 -InnoSetupCompiler D:\Inno_Setup_6\ISCC.exe
+
+# 不显示桌面快捷方式任务
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build_installer.ps1 -NoDesktopShortcut
+```
+
+### 分发前检查
+
+构建完成后可以查看安装包大小、哈希和签名状态：
+
+```powershell
+Get-Item build\installer\dist\LumenPDF-Setup-1.0.0.exe
+Get-FileHash build\installer\dist\LumenPDF-Setup-1.0.0.exe -Algorithm SHA256
+Get-AuthenticodeSignature build\installer\dist\LumenPDF-Setup-1.0.0.exe
+```
+
+生成的安装器未签名，分发到其他电脑时 Windows SmartScreen 可能提示风险。正式分发前建议使用代码签名证书签名安装器和 `lumen.exe`。
+
+### 给其他电脑安装
+
+把 `build\installer\dist\LumenPDF-Setup-1.0.0.exe` 复制到目标电脑，双击运行即可。安装时用户选择目录和桌面快捷方式，完成后从开始菜单或桌面打开 Lumen PDF。
+
+如果目标电脑提示未知发布者，这是因为安装器未签名。确认来源可信后继续安装即可；公开发布时应使用签名证书消除这类警告。
+
+安装后可以把 PDF 文件直接拖到桌面快捷方式、开始菜单快捷方式或安装目录里的 `lumen.exe` 上。Windows 会把 PDF 路径作为启动参数传给程序，Lumen PDF 启动后会自动打开第一个 `.pdf` 文件。若一次拖入多个文件，当前只打开第一个 PDF。
+
 ## 本地数据
 
 应用数据默认存放在：
@@ -104,6 +190,7 @@ lib/src/services/
 lib/src/theme/
 lib/src/widgets/
 lib/src/window/
+installer/
 windows/runner/
 test/
 ```
@@ -127,6 +214,8 @@ test/
 - `lib/src/services/translation_services.dart`：pdf2zh、本地服务请求、选中文本翻译、词典和发音。
 - `lib/src/services/export_image_encoder.dart`：页面图片编码和 DPI 元数据处理。
 - `lib/src/window/window_chrome_controller.dart`：Dart 侧 Windows 窗口 MethodChannel。
+- `installer/build_installer.ps1`：Windows 安装器构建入口，调用 Flutter release 构建和 Inno Setup 编译器。
+- `installer/lumen_pdf.iss`：Inno Setup 安装脚本，定义安装目录选择、快捷方式、卸载器和卸载数据清理提示。
 - `windows/runner/flutter_window.cpp`：原生窗口通道、拖入文件、DPI、窗口尺寸和标题栏主题。
 - `windows/runner/win32_window.cpp`：无边框窗口、圆角、命中测试、最小尺寸和 DPI 处理。
 

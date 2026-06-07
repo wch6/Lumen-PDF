@@ -33,17 +33,21 @@ class ReaderHome extends StatefulWidget {
   const ReaderHome({
     this.repositoryFuture,
     this.settingsStore = const FileReaderSettingsStore(),
+    this.initialFilePaths = const [],
     super.key,
   });
 
   final Future<ReaderRepository>? repositoryFuture;
   final ReaderSettingsStore settingsStore;
+  final List<String> initialFilePaths;
 
   @override
   State<ReaderHome> createState() => _ReaderHomeState();
 }
 
 class _ReaderHomeState extends State<ReaderHome> {
+  static const _maxNoteHistoryDepth = 80;
+
   final _viewerController = PdfViewerController();
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
@@ -65,6 +69,12 @@ class _ReaderHomeState extends State<ReaderHome> {
   bool _pointerInsideWindow = false;
   bool _globalShortcutsSuspended = false;
   bool _noteEditorOpening = false;
+  bool _initialFilePathHandled = false;
+
+  final List<_NoteHistorySnapshot> _noteUndoStack = [];
+  final List<_NoteHistorySnapshot> _noteRedoStack = [];
+  String? _noteHistorySourceId;
+  _NoteHistorySnapshot? _pendingNoteMoveSnapshot;
 
   PdfSource? _source;
   PdfDocument? _document;
@@ -179,6 +189,22 @@ class _ReaderHomeState extends State<ReaderHome> {
     }
     _repository = repository;
     await _loadRecent();
+    await _openInitialFilePath();
+  }
+
+  Future<void> _openInitialFilePath() async {
+    if (_initialFilePathHandled) {
+      return;
+    }
+    _initialFilePathHandled = true;
+    final pdfPath = widget.initialFilePaths.firstWhere(
+      (path) => p.extension(path).toLowerCase() == '.pdf',
+      orElse: () => '',
+    );
+    if (pdfPath.isEmpty) {
+      return;
+    }
+    await _openSource(PdfSource(name: p.basename(pdfPath), path: pdfPath));
   }
 
   Future<void> _loadSettings() async {
@@ -250,6 +276,116 @@ class _ReaderHomeState extends State<ReaderHome> {
       return;
     }
     await (await _repo()).saveHighlights(source, _highlights);
+  }
+
+  void _resetNoteHistoryForSource(PdfSource? source) {
+    _noteHistorySourceId = source?.id;
+    _noteUndoStack.clear();
+    _noteRedoStack.clear();
+    _pendingNoteMoveSnapshot = null;
+  }
+
+  _NoteHistorySnapshot? _captureNoteHistorySnapshot() {
+    final source = _source;
+    if (source == null) {
+      return null;
+    }
+    if (_noteHistorySourceId != source.id) {
+      _resetNoteHistoryForSource(source);
+    }
+    return _NoteHistorySnapshot(
+      sourceId: source.id,
+      notes: List<PageNote>.of(_notes),
+      highlights: List<TextHighlight>.of(_highlights),
+      selectedNoteId: _selectedNoteId,
+    );
+  }
+
+  void _pushNoteUndoSnapshot(_NoteHistorySnapshot snapshot) {
+    if (_source?.id != snapshot.sourceId) {
+      return;
+    }
+    if (_noteUndoStack.isNotEmpty &&
+        _noteHistorySnapshotsEqual(_noteUndoStack.last, snapshot)) {
+      return;
+    }
+    _noteUndoStack.add(snapshot);
+    if (_noteUndoStack.length > _maxNoteHistoryDepth) {
+      _noteUndoStack.removeAt(0);
+    }
+    _noteRedoStack.clear();
+  }
+
+  void _recordNoteHistorySnapshot() {
+    final snapshot = _captureNoteHistorySnapshot();
+    if (snapshot != null) {
+      _pushNoteUndoSnapshot(snapshot);
+    }
+  }
+
+  Future<void> _undoNoteChange() async {
+    if (_source == null) {
+      _showMessage('请先打开一个 PDF');
+      return;
+    }
+    if (_noteUndoStack.isEmpty) {
+      _showMessage('没有可撤回的笔记更改');
+      return;
+    }
+    final current = _captureNoteHistorySnapshot();
+    if (current == null) {
+      return;
+    }
+    final previous = _noteUndoStack.removeLast();
+    _noteRedoStack.add(current);
+    if (_noteRedoStack.length > _maxNoteHistoryDepth) {
+      _noteRedoStack.removeAt(0);
+    }
+    await _restoreNoteHistorySnapshot(previous, '已撤回笔记更改');
+  }
+
+  Future<void> _redoNoteChange() async {
+    if (_source == null) {
+      _showMessage('请先打开一个 PDF');
+      return;
+    }
+    if (_noteRedoStack.isEmpty) {
+      _showMessage('没有可重做的笔记更改');
+      return;
+    }
+    final current = _captureNoteHistorySnapshot();
+    if (current == null) {
+      return;
+    }
+    final next = _noteRedoStack.removeLast();
+    _noteUndoStack.add(current);
+    if (_noteUndoStack.length > _maxNoteHistoryDepth) {
+      _noteUndoStack.removeAt(0);
+    }
+    await _restoreNoteHistorySnapshot(next, '已重做笔记更改');
+  }
+
+  Future<void> _restoreNoteHistorySnapshot(
+    _NoteHistorySnapshot snapshot,
+    String message,
+  ) async {
+    if (_source?.id != snapshot.sourceId) {
+      return;
+    }
+    setState(() {
+      _notes = List<PageNote>.of(snapshot.notes)
+        ..sort(PageNote.compareByPosition);
+      _highlights = List<TextHighlight>.of(snapshot.highlights);
+      final selectedNoteId = snapshot.selectedNoteId;
+      _selectedNoteId =
+          selectedNoteId != null &&
+              _notes.any((note) => note.id == selectedNoteId)
+          ? selectedNoteId
+          : null;
+    });
+    await _saveNotes();
+    await _saveHighlights();
+    _showMessage(message);
   }
 
   Future<void> _pickPdf() async {
@@ -373,6 +509,9 @@ class _ReaderHomeState extends State<ReaderHome> {
     final startPage = opened.page;
     final startPosition = opened.position;
     final alreadyLoaded = _isLoadedSource(resolved);
+    if (!alreadyLoaded) {
+      _resetNoteHistoryForSource(resolved);
+    }
     final syncedNotes = _notesPrunedForHighlights(
       opened.notes,
       opened.highlights,
@@ -935,12 +1074,29 @@ class _ReaderHomeState extends State<ReaderHome> {
     ReaderShortcutAction action,
     ReaderShortcutBinding binding,
   ) {
+    final conflictAction = _conflictingShortcutAction(action, binding);
+    if (conflictAction != null) {
+      _showMessage('快捷键已被「${conflictAction.label}」使用');
+      return;
+    }
     final shortcuts = Map<ReaderShortcutAction, ReaderShortcutBinding>.of(
       _settings.shortcutBindings,
     );
     shortcuts[action] = binding;
     setState(() => _settings = _settings.copyWith(shortcutBindings: shortcuts));
     unawaited(_saveSettings());
+  }
+
+  ReaderShortcutAction? _conflictingShortcutAction(
+    ReaderShortcutAction action,
+    ReaderShortcutBinding binding,
+  ) {
+    for (final entry in _settings.shortcutBindings.entries) {
+      if (entry.key != action && entry.value.hasSameKeys(binding)) {
+        return entry.key;
+      }
+    }
+    return null;
   }
 
   bool _handleWindowShortcutKeyEvent(KeyEvent event) {
@@ -1411,6 +1567,7 @@ class _ReaderHomeState extends State<ReaderHome> {
       ];
       _selectedRecentIndex = _clampedRecentIndex(_selectedRecentIndex, _recent);
     });
+    _resetNoteHistoryForSource(_source);
     _showMessage('已清除全部 PDF 文件数据。');
   }
 
@@ -1436,6 +1593,9 @@ class _ReaderHomeState extends State<ReaderHome> {
         _highlights = const [];
       }
     });
+    if (currentHash != null && hashes.contains(currentHash)) {
+      _resetNoteHistoryForSource(_source);
+    }
     _showMessage('已清除选中文件数据。');
   }
 
@@ -1631,7 +1791,18 @@ class _ReaderHomeState extends State<ReaderHome> {
 
   Future<void> _updateNoteTextInline(PageNote note, String text) async {
     final nextText = text.trim();
+    PageNote? current;
+    for (final item in _notes) {
+      if (item.id == note.id) {
+        current = item;
+        break;
+      }
+    }
+    if (current == null || current.text.trim() == nextText) {
+      return;
+    }
     final now = DateTime.now();
+    _recordNoteHistorySnapshot();
     setState(() {
       _selectedNoteId = note.id;
       _notes = [
@@ -1951,10 +2122,11 @@ class _ReaderHomeState extends State<ReaderHome> {
         text: result.text.trim(),
         updatedAt: DateTime.now(),
       );
+      if (_notes.any((item) => item.id == note.id)) {
+        return;
+      }
+      _recordNoteHistorySnapshot();
       setState(() {
-        if (_notes.any((item) => item.id == note.id)) {
-          return;
-        }
         _notes = [note, ..._notes]..sort(PageNote.compareByPosition);
       });
       await _saveNotes();
@@ -2073,9 +2245,23 @@ class _ReaderHomeState extends State<ReaderHome> {
     }
     final nextText = result.text.trim();
     final now = DateTime.now();
+    PageNote? current;
+    for (final item in _notes) {
+      if (item.id == note.id) {
+        current = item;
+        break;
+      }
+    }
+    if (current != null && current.text.trim() == nextText) {
+      return;
+    }
+    _recordNoteHistorySnapshot();
     setState(() {
-      final exists = _notes.any((item) => item.id == note.id);
-      final updated = note.copyWith(text: nextText, updatedAt: now);
+      final exists = current != null;
+      final updated = (current ?? note).copyWith(
+        text: nextText,
+        updatedAt: now,
+      );
       _notes = [
         for (final item in _notes)
           if (item.id == note.id) updated else item,
@@ -2091,6 +2277,7 @@ class _ReaderHomeState extends State<ReaderHome> {
     bool commit,
   ) async {
     if (pdfPosition != null) {
+      _pendingNoteMoveSnapshot ??= _captureNoteHistorySnapshot();
       final now = DateTime.now();
       setState(() {
         _notes = [
@@ -2107,6 +2294,14 @@ class _ReaderHomeState extends State<ReaderHome> {
       });
     }
     if (commit) {
+      final pendingSnapshot = _pendingNoteMoveSnapshot;
+      _pendingNoteMoveSnapshot = null;
+      final currentSnapshot = _captureNoteHistorySnapshot();
+      if (pendingSnapshot != null &&
+          currentSnapshot != null &&
+          !_noteHistorySnapshotsEqual(pendingSnapshot, currentSnapshot)) {
+        _pushNoteUndoSnapshot(pendingSnapshot);
+      }
       await _saveNotes();
     }
   }
@@ -2137,6 +2332,7 @@ class _ReaderHomeState extends State<ReaderHome> {
     }
     final comment = result.text.trim();
     final note = draft.copyWith(text: comment, updatedAt: DateTime.now());
+    _recordNoteHistorySnapshot();
     setState(() {
       _notes = [note, ..._notes]..sort(PageNote.compareByPosition);
     });
@@ -2270,6 +2466,7 @@ class _ReaderHomeState extends State<ReaderHome> {
       _showMessage('所选区域未产生可更新的高亮。');
       return;
     }
+    _recordNoteHistorySnapshot();
     final nextHighlights = [...additions, ...retained];
     final autoNotes = [
       for (final highlight in additions)
@@ -2341,6 +2538,38 @@ class _ReaderHomeState extends State<ReaderHome> {
           a.colorValue != b.colorValue ||
           a.createdAt != b.createdAt ||
           a.updatedAt != b.updatedAt) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _noteHistorySnapshotsEqual(
+    _NoteHistorySnapshot first,
+    _NoteHistorySnapshot second,
+  ) {
+    return first.sourceId == second.sourceId &&
+        first.selectedNoteId == second.selectedNoteId &&
+        _noteListsEqual(first.notes, second.notes) &&
+        _highlightListsEqual(first.highlights, second.highlights);
+  }
+
+  bool _highlightListsEqual(
+    List<TextHighlight> first,
+    List<TextHighlight> second,
+  ) {
+    if (first.length != second.length) {
+      return false;
+    }
+    for (var i = 0; i < first.length; i++) {
+      final a = first[i];
+      final b = second[i];
+      if (a.id != b.id ||
+          a.page != b.page ||
+          a.text != b.text ||
+          a.colorValue != b.colorValue ||
+          a.createdAt != b.createdAt ||
+          !_highlightRectListsEqual(a.rects, b.rects)) {
         return false;
       }
     }
@@ -2423,9 +2652,14 @@ class _ReaderHomeState extends State<ReaderHome> {
 
   Future<void> _deleteNote(PageNote note, {bool showMessage = false}) async {
     final highlightId = note.highlightId;
+    final removesNote = _notes.any((item) => item.id == note.id);
     final removesHighlight =
         highlightId != null &&
         _highlights.any((highlight) => highlight.id == highlightId);
+    if (!removesNote && !removesHighlight) {
+      return;
+    }
+    _recordNoteHistorySnapshot();
     setState(() {
       _notes = _notes.where((item) => item.id != note.id).toList();
       if (_selectedNoteId == note.id) {
@@ -2624,9 +2858,19 @@ class _ReaderHomeState extends State<ReaderHome> {
         .trim();
   }
 
+  String _messageText(String text) {
+    final trimmedRight = text.trimRight();
+    if (trimmedRight.isNotEmpty &&
+        trimmedRight.codeUnitAt(trimmedRight.length - 1) == 0x3002) {
+      return trimmedRight.substring(0, trimmedRight.length - 1);
+    }
+    return trimmedRight;
+  }
+
   void _showMessage(String text) {
     _messageTimer?.cancel();
     _messageEntry?.remove();
+    final displayText = _messageText(text);
 
     final overlay = Overlay.of(context);
     final fallbackWidth = MediaQuery.sizeOf(context).width;
@@ -2654,7 +2898,7 @@ class _ReaderHomeState extends State<ReaderHome> {
                 color: Colors.transparent,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: AppColors.ink.withValues(alpha: 0.94),
+                    color: Colors.black,
                     borderRadius: BorderRadius.circular(8),
                     boxShadow: const [
                       BoxShadow(
@@ -2670,9 +2914,9 @@ class _ReaderHomeState extends State<ReaderHome> {
                       vertical: 10,
                     ),
                     child: Text(
-                      text,
+                      displayText,
                       style: TextStyle(
-                        color: AppColors.surface,
+                        color: Colors.white,
                         fontSize: 13,
                         fontWeight: FontWeight.w800,
                       ),
@@ -2729,6 +2973,12 @@ class _ReaderHomeState extends State<ReaderHome> {
         break;
       case ReaderShortcutAction.addNote:
         unawaited(_addNote());
+        break;
+      case ReaderShortcutAction.undoNoteChange:
+        unawaited(_undoNoteChange());
+        break;
+      case ReaderShortcutAction.redoNoteChange:
+        unawaited(_redoNoteChange());
         break;
       case ReaderShortcutAction.previousPage:
         _goToPage(_currentPage - 1);
@@ -3119,6 +3369,20 @@ class _ReaderHomeState extends State<ReaderHome> {
 }
 
 enum _NoteEditorAction { save, clear, delete }
+
+class _NoteHistorySnapshot {
+  const _NoteHistorySnapshot({
+    required this.sourceId,
+    required this.notes,
+    required this.highlights,
+    required this.selectedNoteId,
+  });
+
+  final String sourceId;
+  final List<PageNote> notes;
+  final List<TextHighlight> highlights;
+  final String? selectedNoteId;
+}
 
 class _NoteEditorResult {
   const _NoteEditorResult(this.action, this.text);

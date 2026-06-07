@@ -1,12 +1,12 @@
-﻿import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'src/app/pdf_reader_app.dart';
 
 export 'src/app/pdf_reader_app.dart';
 
-void main() {
+void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
   pdfrxFlutterInitialize();
-  runApp(const PdfReaderApp());
+  runApp(PdfReaderApp(initialFilePaths: args));
 }

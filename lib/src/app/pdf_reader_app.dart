@@ -6,10 +6,16 @@ import '../theme/app_colors.dart';
 import 'reader_home.dart';
 
 class PdfReaderApp extends StatelessWidget {
-  const PdfReaderApp({this.repositoryFuture, this.settingsStore, super.key});
+  const PdfReaderApp({
+    this.repositoryFuture,
+    this.settingsStore,
+    this.initialFilePaths = const [],
+    super.key,
+  });
 
   final Future<ReaderRepository>? repositoryFuture;
   final ReaderSettingsStore? settingsStore;
+  final List<String> initialFilePaths;
 
   @override
   Widget build(BuildContext context) {
@@ -44,6 +50,7 @@ class PdfReaderApp extends StatelessWidget {
       home: ReaderHome(
         repositoryFuture: repositoryFuture,
         settingsStore: settingsStore ?? const FileReaderSettingsStore(),
+        initialFilePaths: initialFilePaths,
       ),
     );
   }

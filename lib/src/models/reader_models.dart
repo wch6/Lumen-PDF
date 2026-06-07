@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
 enum PanelMode { library, pages, outline, search, notes, translate }
@@ -30,6 +29,8 @@ enum ReaderShortcutAction {
   openNotesPanel,
   openSettings,
   addNote,
+  undoNoteChange,
+  redoNoteChange,
   previousPage,
   nextPage,
   fitWidth,
@@ -84,6 +85,14 @@ const kDefaultShortcutBindings = <ReaderShortcutAction, ReaderShortcutBinding>{
     control: true,
     shift: true,
   ),
+  ReaderShortcutAction.undoNoteChange: ReaderShortcutBinding(
+    keyId: 0x000000000000007a,
+    control: true,
+  ),
+  ReaderShortcutAction.redoNoteChange: ReaderShortcutBinding(
+    keyId: 0x0000000000000079,
+    control: true,
+  ),
   ReaderShortcutAction.previousPage: ReaderShortcutBinding(
     keyId: 0x00100000308,
   ),
@@ -131,6 +140,8 @@ extension ReaderShortcutActionLabel on ReaderShortcutAction {
       ReaderShortcutAction.openNotesPanel => '打开笔记',
       ReaderShortcutAction.openSettings => '打开设置',
       ReaderShortcutAction.addNote => '新建便签',
+      ReaderShortcutAction.undoNoteChange => '撤回笔记更改',
+      ReaderShortcutAction.redoNoteChange => '重做笔记更改',
       ReaderShortcutAction.previousPage => '上一页',
       ReaderShortcutAction.nextPage => '下一页',
       ReaderShortcutAction.fitWidth => '适合宽度',
@@ -166,6 +177,14 @@ class ReaderShortcutBinding {
   final bool meta;
 
   LogicalKeyboardKey get logicalKey => LogicalKeyboardKey(keyId);
+
+  bool hasSameKeys(ReaderShortcutBinding other) {
+    return keyId == other.keyId &&
+        control == other.control &&
+        shift == other.shift &&
+        alt == other.alt &&
+        meta == other.meta;
+  }
 
   String get label {
     final parts = <String>[
@@ -901,11 +920,7 @@ bool _sameShortcutBinding(
   ReaderShortcutBinding first,
   ReaderShortcutBinding second,
 ) {
-  return first.keyId == second.keyId &&
-      first.control == second.control &&
-      first.shift == second.shift &&
-      first.alt == second.alt &&
-      first.meta == second.meta;
+  return first.hasSameKeys(second);
 }
 
 class PageExportOptions {
@@ -1019,41 +1034,6 @@ class RecentDocument {
           ? this.position
           : position as ReaderPosition?,
     );
-  }
-
-  Map<String, Object?> toJson() {
-    return {
-      'name': name,
-      'path': path,
-      'size': size,
-      'page': page,
-      'openedAt': openedAt.toIso8601String(),
-      'fileHash': fileHash,
-      'position': position?.toJson(),
-    };
-  }
-
-  static RecentDocument? tryDecode(String raw) {
-    try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      final path = data['path'] as String?;
-      if (path == null || path.isEmpty) {
-        return null;
-      }
-      return RecentDocument(
-        name: data['name'] as String? ?? p.basename(path),
-        path: path,
-        size: data['size'] as int?,
-        page: data['page'] as int? ?? 1,
-        openedAt:
-            DateTime.tryParse(data['openedAt'] as String? ?? '') ??
-            DateTime(1970),
-        fileHash: data['fileHash'] as String?,
-        position: ReaderPosition.tryDecode(data['position']),
-      );
-    } catch (_) {
-      return null;
-    }
   }
 }
 
@@ -1262,47 +1242,6 @@ class PageNote {
     }
     return a.createdAt.compareTo(b.createdAt);
   }
-
-  Map<String, Object?> toJson() {
-    return {
-      'id': id,
-      'page': page,
-      'text': text,
-      'createdAt': createdAt.toIso8601String(),
-      'x': x,
-      'y': y,
-      'highlightId': highlightId,
-      'colorValue': colorValue,
-      'updatedAt': updatedAt?.toIso8601String(),
-    };
-  }
-
-  static PageNote? tryDecode(String raw) {
-    try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      final text = data['text'] as String?;
-      if (text == null || text.trim().isEmpty) {
-        return null;
-      }
-      return PageNote(
-        id:
-            data['id'] as String? ??
-            DateTime.now().microsecondsSinceEpoch.toString(),
-        page: data['page'] as int? ?? 1,
-        text: text,
-        createdAt:
-            DateTime.tryParse(data['createdAt'] as String? ?? '') ??
-            DateTime(1970),
-        x: (data['x'] as num?)?.toDouble(),
-        y: (data['y'] as num?)?.toDouble(),
-        highlightId: data['highlightId'] as String?,
-        colorValue: data['colorValue'] as int? ?? 0x66FFE45C,
-        updatedAt: DateTime.tryParse(data['updatedAt'] as String? ?? ''),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
 }
 
 class TextHighlight {
@@ -1338,44 +1277,6 @@ class TextHighlight {
       createdAt: createdAt ?? this.createdAt,
       colorValue: colorValue ?? this.colorValue,
     );
-  }
-
-  Map<String, Object?> toJson() {
-    return {
-      'id': id,
-      'page': page,
-      'text': text,
-      'rects': rects.map((rect) => rect.toJson()).toList(),
-      'createdAt': createdAt.toIso8601String(),
-      'colorValue': colorValue,
-    };
-  }
-
-  static TextHighlight? tryDecode(String raw) {
-    try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      final rects = (data['rects'] as List? ?? const [])
-          .map((item) => HighlightRect.tryDecode(item))
-          .nonNulls
-          .toList();
-      if (rects.isEmpty) {
-        return null;
-      }
-      return TextHighlight(
-        id:
-            data['id'] as String? ??
-            DateTime.now().microsecondsSinceEpoch.toString(),
-        page: data['page'] as int? ?? 1,
-        text: data['text'] as String? ?? '',
-        rects: rects,
-        createdAt:
-            DateTime.tryParse(data['createdAt'] as String? ?? '') ??
-            DateTime(1970),
-        colorValue: data['colorValue'] as int? ?? 0x66FFE066,
-      );
-    } catch (_) {
-      return null;
-    }
   }
 }
 
@@ -1437,8 +1338,5 @@ class HighlightRect {
 class StorageKeys {
   const StorageKeys._();
 
-  static const recent = 'lumen_pdf.recent';
-  static const notes = 'lumen_pdf.notes';
-  static const highlights = 'lumen_pdf.highlights';
   static const settings = 'lumen_pdf.settings';
 }

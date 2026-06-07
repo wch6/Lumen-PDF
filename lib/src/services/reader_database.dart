@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS recent_files (
 
 CREATE INDEX IF NOT EXISTS idx_recent_files_opened_at
   ON recent_files(opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recent_files_file_hash
+  ON recent_files(file_hash);
 ''');
     _ensureColumn(_appDb, 'recent_files', 'position_json', 'TEXT');
   }
@@ -99,6 +101,9 @@ CREATE TABLE IF NOT EXISTS highlights (
 
 CREATE INDEX IF NOT EXISTS idx_notes_file_hash
   ON notes(file_hash, page);
+CREATE INDEX IF NOT EXISTS idx_notes_file_hash_highlight_id
+  ON notes(file_hash, highlight_id)
+  WHERE highlight_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_highlights_file_hash
   ON highlights(file_hash, page);
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at
@@ -328,36 +333,67 @@ ORDER BY page ASC, y ASC, x ASC, created_at ASC
 
   Future<void> saveNotes(String fileHash, List<PageNote> notes) async {
     _fileDb.execute('BEGIN IMMEDIATE;');
-    final statement = _fileDb.prepare('''
+    PreparedStatement? statement;
+    try {
+      final noteIds = {for (final note in notes) note.id};
+      if (noteIds.isEmpty) {
+        _fileDb.execute('DELETE FROM notes WHERE file_hash = ?', [fileHash]);
+      } else {
+        final existingRows = _fileDb.select(
+          'SELECT id FROM notes WHERE file_hash = ?',
+          [fileHash],
+        );
+        final staleIds = [
+          for (final row in existingRows)
+            if (!noteIds.contains(row['id'])) row['id'] as String,
+        ];
+        if (staleIds.isNotEmpty) {
+          final placeholders = List.filled(staleIds.length, '?').join(', ');
+          _fileDb.execute(
+            'DELETE FROM notes WHERE file_hash = ? AND id IN ($placeholders)',
+            [fileHash, ...staleIds],
+          );
+        }
+
+        statement = _fileDb.prepare('''
 INSERT INTO notes (
   id, file_hash, page, text, x, y, highlight_id, color_value, created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  file_hash = excluded.file_hash,
+  page = excluded.page,
+  text = excluded.text,
+  x = excluded.x,
+  y = excluded.y,
+  highlight_id = excluded.highlight_id,
+  color_value = excluded.color_value,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at
 ''');
-    try {
-      _fileDb.execute('DELETE FROM notes WHERE file_hash = ?', [fileHash]);
-      for (final note in notes) {
-        final createdAt = note.createdAt.millisecondsSinceEpoch;
-        final updatedAt =
-            (note.updatedAt ?? note.createdAt).millisecondsSinceEpoch;
-        statement.execute([
-          note.id,
-          fileHash,
-          note.page,
-          note.text,
-          note.x,
-          note.y,
-          note.highlightId,
-          note.colorValue,
-          createdAt,
-          updatedAt,
-        ]);
+        for (final note in notes) {
+          final createdAt = note.createdAt.millisecondsSinceEpoch;
+          final updatedAt =
+              (note.updatedAt ?? note.createdAt).millisecondsSinceEpoch;
+          statement.execute([
+            note.id,
+            fileHash,
+            note.page,
+            note.text,
+            note.x,
+            note.y,
+            note.highlightId,
+            note.colorValue,
+            createdAt,
+            updatedAt,
+          ]);
+        }
       }
       _fileDb.execute('COMMIT;');
     } catch (_) {
       _rollback(_fileDb);
       rethrow;
     } finally {
-      statement.close();
+      statement?.close();
     }
   }
 

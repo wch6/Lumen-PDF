@@ -122,6 +122,8 @@ void main() {
       defaults[ReaderShortcutAction.openSettings]!.keyId,
       LogicalKeyboardKey.quote.keyId,
     );
+    expect(defaults[ReaderShortcutAction.undoNoteChange]!.label, 'Ctrl+Z');
+    expect(defaults[ReaderShortcutAction.redoNoteChange]!.label, 'Ctrl+Y');
     expect(defaults[ReaderShortcutAction.fitWidth]!.label, 'Ctrl+W');
     expect(defaults[ReaderShortcutAction.fitPage]!.label, 'Ctrl+P');
 
@@ -155,6 +157,25 @@ void main() {
       migrated.shortcutBindings[ReaderShortcutAction.openSettings]!.keyId,
       LogicalKeyboardKey.quote.keyId,
     );
+  });
+
+  test('shortcut binding comparison detects duplicate combinations', () {
+    const first = ReaderShortcutBinding(
+      keyId: 0x000000000000007a,
+      control: true,
+    );
+    const duplicate = ReaderShortcutBinding(
+      keyId: 0x000000000000007a,
+      control: true,
+    );
+    const different = ReaderShortcutBinding(
+      keyId: 0x000000000000007a,
+      control: true,
+      shift: true,
+    );
+
+    expect(first.hasSameKeys(duplicate), isTrue);
+    expect(first.hasSameKeys(different), isFalse);
   });
 
   test('pronunciation audio text is labelled by accent', () {

@@ -307,12 +307,31 @@ class _SettingsDialogState extends State<SettingsDialog> {
     ReaderShortcutAction action,
     ReaderShortcutBinding binding,
   ) {
+    final conflictAction = _conflictingShortcutAction(action, binding);
+    if (conflictAction != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('快捷键已被「${conflictAction.label}」使用')),
+      );
+      return;
+    }
     final shortcuts = Map<ReaderShortcutAction, ReaderShortcutBinding>.of(
       _settings.shortcutBindings,
     );
     shortcuts[action] = binding;
     setState(() => _settings = _settings.copyWith(shortcutBindings: shortcuts));
     widget.onShortcutChanged(action, binding);
+  }
+
+  ReaderShortcutAction? _conflictingShortcutAction(
+    ReaderShortcutAction action,
+    ReaderShortcutBinding binding,
+  ) {
+    for (final entry in _settings.shortcutBindings.entries) {
+      if (entry.key != action && entry.value.hasSameKeys(binding)) {
+        return entry.key;
+      }
+    }
+    return null;
   }
 
   void _resetShortcut(ReaderShortcutAction action) {
@@ -325,7 +344,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _captureShortcut(ReaderShortcutAction action) async {
     final binding = await showDialog<ReaderShortcutBinding>(
       context: context,
-      builder: (context) => _ShortcutCaptureDialog(action: action),
+      builder: (context) => _ShortcutCaptureDialog(
+        action: action,
+        bindings: _settings.shortcutBindings,
+      ),
     );
     if (binding != null) {
       _setShortcut(action, binding);
@@ -1229,7 +1251,7 @@ class _ShortcutSettingsView extends StatelessWidget {
         const _SectionTitle('快捷键'),
         const SizedBox(height: 8),
         Text(
-          '点击“录入”后按下新的组合键。建议保留 Ctrl+F 搜索、Esc 清除/隐藏侧边栏、Ctrl+O 打开文件、Ctrl+Tab 最近文件、Ctrl+H 高亮颜色、Ctrl+L 资料库、Ctrl+T 缩略图、Shift+Tab 单/双页缩略图、Ctrl+B 目录、Ctrl+N 笔记、Ctrl+\' 设置、Ctrl+W 适合宽度、Ctrl+P 适合页面。',
+          '点击“录入”后按下新的组合键。新组合不能与当前其他快捷键重复。默认 Ctrl+Z 撤回笔记更改，Ctrl+Y 重做笔记更改。',
           style: TextStyle(color: AppColors.subtle, fontSize: 12, height: 1.45),
         ),
         const SizedBox(height: 18),
@@ -1492,9 +1514,10 @@ class _SelectionApiConfigDialogState extends State<_SelectionApiConfigDialog> {
 }
 
 class _ShortcutCaptureDialog extends StatefulWidget {
-  const _ShortcutCaptureDialog({required this.action});
+  const _ShortcutCaptureDialog({required this.action, required this.bindings});
 
   final ReaderShortcutAction action;
+  final Map<ReaderShortcutAction, ReaderShortcutBinding> bindings;
 
   @override
   State<_ShortcutCaptureDialog> createState() => _ShortcutCaptureDialogState();
@@ -1503,6 +1526,9 @@ class _ShortcutCaptureDialog extends StatefulWidget {
 class _ShortcutCaptureDialogState extends State<_ShortcutCaptureDialog> {
   final _focusNode = FocusNode();
   ReaderShortcutBinding? _binding;
+  ReaderShortcutAction? _conflictAction;
+
+  bool get _canSave => _binding != null && _conflictAction == null;
 
   @override
   void initState() {
@@ -1520,6 +1546,20 @@ class _ShortcutCaptureDialogState extends State<_ShortcutCaptureDialog> {
     super.dispose();
   }
 
+  ReaderShortcutAction? _conflictingAction(ReaderShortcutBinding binding) {
+    for (final action in ReaderShortcutAction.values) {
+      if (action == widget.action) {
+        continue;
+      }
+      final current =
+          widget.bindings[action] ?? kDefaultShortcutBindings[action];
+      if (current != null && current.hasSameKeys(binding)) {
+        return action;
+      }
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -1531,7 +1571,10 @@ class _ShortcutCaptureDialogState extends State<_ShortcutCaptureDialog> {
         onKeyEvent: (event) {
           final next = ReaderShortcutBinding.fromKeyEvent(event);
           if (next != null) {
-            setState(() => _binding = next);
+            setState(() {
+              _binding = next;
+              _conflictAction = _conflictingAction(next);
+            });
           }
         },
         child: Container(
@@ -1556,9 +1599,27 @@ class _ShortcutCaptureDialogState extends State<_ShortcutCaptureDialog> {
               Text(
                 _binding?.label ?? '按下新的快捷键',
                 style: TextStyle(
-                  color: _binding == null ? AppColors.subtle : AppColors.accent,
+                  color: _binding == null
+                      ? AppColors.subtle
+                      : _conflictAction == null
+                      ? AppColors.accent
+                      : AppColors.danger,
                   fontSize: 22,
                   fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 18,
+                child: Text(
+                  _conflictAction == null
+                      ? ' '
+                      : '已被「${_conflictAction!.label}」使用',
+                  style: TextStyle(
+                    color: AppColors.danger,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -1571,9 +1632,9 @@ class _ShortcutCaptureDialogState extends State<_ShortcutCaptureDialog> {
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: _binding == null
-              ? null
-              : () => Navigator.of(context).pop(_binding),
+          onPressed: _canSave
+              ? () => Navigator.of(context).pop(_binding)
+              : null,
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.accent,
             foregroundColor: AppColors.surface,

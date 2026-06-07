@@ -94,4 +94,44 @@ void main() {
     expect(second.source.hash, isNot(first.source.hash));
     expect(second.notes, isEmpty);
   });
+
+  test(
+    'repository note saves update existing rows and remove stale rows',
+    () async {
+      final repository = ReaderRepository(database: ReaderDatabase.inMemory());
+      addTearDown(repository.dispose);
+      final bytes = Uint8List.fromList([3, 4, 5]);
+
+      final opened = await repository.openSource(
+        PdfSource(name: 'notes.pdf', bytes: bytes, size: bytes.length),
+        initialPage: 1,
+      );
+      final firstNote = PageNote(
+        id: 'note-1',
+        page: 1,
+        text: 'first',
+        createdAt: DateTime(2026),
+      );
+      final secondNote = PageNote(
+        id: 'note-2',
+        page: 1,
+        text: 'second',
+        createdAt: DateTime(2026),
+      );
+
+      await repository.saveNotes(opened.source, [firstNote, secondNote]);
+      await repository.saveNotes(opened.source, [
+        secondNote.copyWith(text: 'updated', updatedAt: DateTime(2026, 2)),
+      ]);
+
+      final reloaded = await repository.openSource(
+        PdfSource(name: 'notes-copy.pdf', bytes: bytes, size: bytes.length),
+        initialPage: 1,
+      );
+
+      expect(reloaded.notes, hasLength(1));
+      expect(reloaded.notes.single.id, 'note-2');
+      expect(reloaded.notes.single.text, 'updated');
+    },
+  );
 }

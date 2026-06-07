@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_reader/main.dart';
+import 'package:pdf_reader/src/app/reader_home.dart';
 import 'package:pdf_reader/src/services/reader_database.dart';
 import 'package:pdf_reader/src/services/reader_repository.dart';
 import 'package:pdf_reader/src/services/reader_settings_store.dart';
@@ -29,5 +32,27 @@ void main() {
     expect(find.text('打开 PDF 开始阅读'), findsOneWidget);
     expect(find.byTooltip('打开 PDF'), findsOneWidget);
     expect(find.byIcon(Icons.folder_open_rounded), findsWidgets);
+  });
+
+  testWidgets('passes launch file paths into the reader shell', (tester) async {
+    final repositoryCompleter = Completer<ReaderRepository>();
+    final launchPaths = ['C:\\Docs\\notes.txt', 'C:\\Docs\\sample.pdf'];
+
+    await tester.pumpWidget(
+      PdfReaderApp(
+        repositoryFuture: repositoryCompleter.future,
+        settingsStore: InMemoryReaderSettingsStore(),
+        initialFilePaths: launchPaths,
+      ),
+    );
+
+    final readerHome = tester.widget<ReaderHome>(find.byType(ReaderHome));
+
+    expect(readerHome.initialFilePaths, launchPaths);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    repositoryCompleter.complete(
+      ReaderRepository(database: ReaderDatabase.inMemory()),
+    );
   });
 }

@@ -1,0 +1,74 @@
+# ==========================
+# 原有规则（保留并稍作整理）
+# ==========================
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ==========================
+# 新增规则（解决你遇到的错误）
+# ==========================
+
+# Windows / Dart / Flutter 临时文件夹及性能日志
+.localappdata/
+.appdata/
+*.tmp
+*.temp
+.perf/
+*.pid
+
+# 用户本地配置目录（常见于开发工具误生成在项目根目录）
+AppData/
+LocalCache/
+
+# 其他可能存在的系统或编辑器临时文件
+# 注意：删除了 *.lock，以免误伤 pubspec.lock
+*.swp
+*.swo
+*~
+Thumbs.db
+ehthumbs.db
+Desktop.ini

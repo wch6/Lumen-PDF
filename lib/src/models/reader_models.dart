@@ -1174,6 +1174,20 @@ class FileDataSummary {
   final DateTime updatedAt;
 }
 
+class PdfFirstPagePreviewData {
+  const PdfFirstPagePreviewData({
+    required this.pngBytes,
+    required this.width,
+    required this.height,
+    required this.updatedAt,
+  });
+
+  final Uint8List pngBytes;
+  final int width;
+  final int height;
+  final DateTime updatedAt;
+}
+
 class PageNote {
   const PageNote({
     required this.id,

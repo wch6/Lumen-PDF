@@ -10,6 +10,7 @@ import 'package:audioplayers/audioplayers.dart';
 import '../models/reader_models.dart';
 import '../services/translation_services.dart';
 import '../theme/app_colors.dart';
+import 'pdf_first_page_preview.dart';
 import 'reader_toolbar.dart' show PageStepper;
 import 'shortcut_tooltip.dart';
 import 'themed_context_menu.dart';
@@ -18,6 +19,7 @@ const double kReaderPanelWidth = 272;
 const double kSingleThumbnailPanelWidth = 152;
 const EdgeInsets kThumbnailGridPadding = EdgeInsets.fromLTRB(14, 8, 14, 18);
 const double kThumbnailGridGap = 12;
+const double kThumbnailLabelExtent = 32;
 
 class ReaderPanel extends StatelessWidget {
   const ReaderPanel({
@@ -34,6 +36,7 @@ class ReaderPanel extends StatelessWidget {
     required this.pageCount,
     required this.jumpController,
     required this.recent,
+    required this.firstPagePreviews,
     required this.selectedRecentIndex,
     required this.loadingLibrary,
     required this.textSearcher,
@@ -80,6 +83,7 @@ class ReaderPanel extends StatelessWidget {
   final int pageCount;
   final TextEditingController jumpController;
   final List<RecentDocument> recent;
+  final Map<String, PdfFirstPagePreviewData> firstPagePreviews;
   final int selectedRecentIndex;
   final bool loadingLibrary;
   final PdfTextSearcher? textSearcher;
@@ -129,6 +133,7 @@ class ReaderPanel extends StatelessWidget {
         child: switch (mode) {
           PanelMode.library => LibraryPanel(
             recent: recent,
+            firstPagePreviews: firstPagePreviews,
             selectedRecentIndex: selectedRecentIndex,
             loading: loadingLibrary,
             shortcutBindings: shortcutBindings,
@@ -198,6 +203,7 @@ class ReaderPanel extends StatelessWidget {
 class LibraryPanel extends StatefulWidget {
   const LibraryPanel({
     required this.recent,
+    required this.firstPagePreviews,
     required this.selectedRecentIndex,
     required this.loading,
     required this.shortcutBindings,
@@ -212,6 +218,7 @@ class LibraryPanel extends StatefulWidget {
   });
 
   final List<RecentDocument> recent;
+  final Map<String, PdfFirstPagePreviewData> firstPagePreviews;
   final int selectedRecentIndex;
   final bool loading;
   final Map<ReaderShortcutAction, ReaderShortcutBinding> shortcutBindings;
@@ -323,6 +330,8 @@ class _LibraryPanelState extends State<LibraryPanel> {
                 RecentTile(
                   selected: index == widget.selectedRecentIndex,
                   item: widget.recent[index],
+                  preview:
+                      widget.firstPagePreviews[widget.recent[index].fileHash],
                   onTap: () => widget.onOpenRecent(widget.recent[index]),
                   onDelete: () => widget.onDeleteRecent(widget.recent[index]),
                   onPdfContextMenu: widget.onPdfContextMenu,
@@ -899,8 +908,17 @@ class _PagesPanelState extends State<PagesPanel> {
       0.0,
       _thumbnailScrollController.offset - kThumbnailGridPadding.top,
     );
-    final row = (firstContentY / (metrics.cellHeight + kThumbnailGridGap))
-        .floor();
+    var rowTop = 0.0;
+    final rowCount = metrics.rowCount(document.pages.length);
+    for (var row = 0; row < rowCount; row++) {
+      final rowHeight = _thumbnailRowExtent(document, row, metrics);
+      if (firstContentY <= rowTop + rowHeight + kThumbnailGridGap / 2) {
+        final page = row * metrics.crossAxisCount + 1;
+        return page.clamp(1, document.pages.length);
+      }
+      rowTop += rowHeight + kThumbnailGridGap;
+    }
+    final row = math.max(0, rowCount - 1);
     final page = row * metrics.crossAxisCount + 1;
     return page.clamp(1, document.pages.length);
   }
@@ -916,8 +934,7 @@ class _PagesPanelState extends State<PagesPanel> {
     }
     final pageIndex = page.clamp(1, document.pages.length) - 1;
     final row = pageIndex ~/ metrics.crossAxisCount;
-    return kThumbnailGridPadding.top +
-        row * (metrics.cellHeight + kThumbnailGridGap);
+    return kThumbnailGridPadding.top + _thumbnailRowTop(document, row, metrics);
   }
 
   List<_PreviewScrollRect> _previewRectsInScrollSpace(
@@ -942,12 +959,13 @@ class _PagesPanelState extends State<PagesPanel> {
           kThumbnailGridPadding.left +
           column * (metrics.cellWidth + kThumbnailGridGap);
       final cellTop =
-          kThumbnailGridPadding.top +
-          row * (metrics.cellHeight + kThumbnailGridGap);
-      final pageRect = _thumbnailPagePaintRect(
-        Size(metrics.cellWidth, metrics.imageHeight),
-        Size(page.width, page.height),
-      ).shift(Offset(cellLeft, cellTop));
+          kThumbnailGridPadding.top + _thumbnailRowTop(document, row, metrics);
+      final pageRect = Rect.fromLTWH(
+        cellLeft,
+        cellTop,
+        metrics.cellWidth,
+        _thumbnailPageImageHeight(page, metrics.cellWidth),
+      );
       for (final rect in preview.rects) {
         rects.add(
           _PreviewScrollRect(
@@ -983,39 +1001,59 @@ class _PagesPanelState extends State<PagesPanel> {
     if (cellWidth <= 0) {
       return null;
     }
-    const childAspectRatio = 0.63;
-    final cellHeight = cellWidth / childAspectRatio;
     return _ThumbnailGridMetrics(
       crossAxisCount: crossAxisCount,
       cellWidth: cellWidth,
-      cellHeight: cellHeight,
-      imageHeight: math.max(0.0, cellHeight - 32),
     );
   }
 
-  Rect _thumbnailPagePaintRect(Size canvasSize, Size pageSize) {
-    if (canvasSize.width <= 0 ||
-        canvasSize.height <= 0 ||
-        pageSize.width <= 0 ||
-        pageSize.height <= 0) {
-      return Rect.zero;
+  double _thumbnailPageImageHeight(PdfPage page, double width) {
+    if (width <= 0 || page.width <= 0 || page.height <= 0) {
+      return math.max(1.0, width);
     }
-    final pageAspect = pageSize.width / pageSize.height;
-    final canvasAspect = canvasSize.width / canvasSize.height;
-    if (canvasAspect > pageAspect) {
-      final height = canvasSize.height;
-      final width = height * pageAspect;
-      return Rect.fromLTWH((canvasSize.width - width) / 2, 0, width, height);
+    return math.max(1.0, width * page.height / page.width);
+  }
+
+  double _thumbnailPageExtent(PdfPage page, _ThumbnailGridMetrics metrics) {
+    return _thumbnailPageImageHeight(page, metrics.cellWidth) +
+        kThumbnailLabelExtent;
+  }
+
+  double _thumbnailRowExtent(
+    PdfDocument document,
+    int row,
+    _ThumbnailGridMetrics metrics,
+  ) {
+    final firstPageIndex = row * metrics.crossAxisCount;
+    var extent = 0.0;
+    for (var column = 0; column < metrics.crossAxisCount; column++) {
+      final pageIndex = firstPageIndex + column;
+      if (pageIndex >= document.pages.length) {
+        break;
+      }
+      extent = math.max(
+        extent,
+        _thumbnailPageExtent(document.pages[pageIndex], metrics),
+      );
     }
-    final width = canvasSize.width;
-    final height = width / pageAspect;
-    return Rect.fromLTWH(0, (canvasSize.height - height) / 2, width, height);
+    return extent;
+  }
+
+  double _thumbnailRowTop(
+    PdfDocument document,
+    int row,
+    _ThumbnailGridMetrics metrics,
+  ) {
+    var top = 0.0;
+    for (var index = 0; index < row; index++) {
+      top += _thumbnailRowExtent(document, index, metrics) + kThumbnailGridGap;
+    }
+    return top;
   }
 
   @override
   Widget build(BuildContext context) {
     final doc = widget.document;
-    final crossAxisCount = widget.twoColumn ? 2 : 1;
     final viewportPreviewByPage = {
       for (final preview in widget.viewportPreviews) preview.page: preview,
     };
@@ -1074,34 +1112,70 @@ class _PagesPanelState extends State<PagesPanel> {
                         _scheduleRestoreThumbnailPage();
                         _scheduleViewportAutoScroll();
                       }
-                      return GridView.builder(
-                        controller: _thumbnailScrollController,
-                        physics: const _ThumbnailScrollPhysics(
-                          parent: ClampingScrollPhysics(),
+                      final metrics = _thumbnailGridMetrics(
+                        constraints.maxWidth,
+                      );
+                      if (metrics == null) {
+                        return const SizedBox.shrink();
+                      }
+                      final rowCount = metrics.rowCount(doc.pages.length);
+                      return Listener(
+                        onPointerSignal: _handleThumbnailPointerSignal,
+                        child: ListView.builder(
+                          controller: _thumbnailScrollController,
+                          physics: const _ThumbnailScrollPhysics(
+                            parent: ClampingScrollPhysics(),
+                          ),
+                          padding: kThumbnailGridPadding,
+                          itemCount: rowCount,
+                          itemBuilder: (context, row) {
+                            final firstPageIndex = row * metrics.crossAxisCount;
+                            final lastPageIndex = math.min(
+                              firstPageIndex + metrics.crossAxisCount,
+                              doc.pages.length,
+                            );
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: row == rowCount - 1
+                                    ? 0
+                                    : kThumbnailGridGap,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  for (
+                                    var pageIndex = firstPageIndex;
+                                    pageIndex < lastPageIndex;
+                                    pageIndex++
+                                  ) ...[
+                                    if (pageIndex > firstPageIndex)
+                                      const SizedBox(width: kThumbnailGridGap),
+                                    SizedBox(
+                                      width: metrics.cellWidth,
+                                      child: PageThumb(
+                                        document: doc,
+                                        pageNumber: pageIndex + 1,
+                                        imageHeight: _thumbnailPageImageHeight(
+                                          doc.pages[pageIndex],
+                                          metrics.cellWidth,
+                                        ),
+                                        viewportPreview:
+                                            viewportPreviewByPage[pageIndex +
+                                                1],
+                                        onTap: () =>
+                                            widget.onGoToPage(pageIndex + 1),
+                                        onQuickExport: () => widget
+                                            .onQuickExportPage(pageIndex + 1),
+                                        onExport: () =>
+                                            widget.onExportPage(pageIndex + 1),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            );
+                          },
                         ),
-                        padding: kThumbnailGridPadding,
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: crossAxisCount,
-                          mainAxisSpacing: kThumbnailGridGap,
-                          crossAxisSpacing: kThumbnailGridGap,
-                          childAspectRatio: widget.twoColumn ? 0.63 : 0.63,
-                        ),
-                        itemCount: doc.pages.length,
-                        itemBuilder: (context, index) {
-                          final page = index + 1;
-                          return Listener(
-                            onPointerSignal: _handleThumbnailPointerSignal,
-                            child: PageThumb(
-                              document: doc,
-                              pageNumber: page,
-                              viewportPreview: viewportPreviewByPage[page],
-                              onTap: () => widget.onGoToPage(page),
-                              onQuickExport: () =>
-                                  widget.onQuickExportPage(page),
-                              onExport: () => widget.onExportPage(page),
-                            ),
-                          );
-                        },
                       );
                     },
                   ),
@@ -1237,14 +1311,14 @@ class _ThumbnailGridMetrics {
   const _ThumbnailGridMetrics({
     required this.crossAxisCount,
     required this.cellWidth,
-    required this.cellHeight,
-    required this.imageHeight,
   });
 
   final int crossAxisCount;
   final double cellWidth;
-  final double cellHeight;
-  final double imageHeight;
+
+  int rowCount(int pageCount) {
+    return (pageCount + crossAxisCount - 1) ~/ crossAxisCount;
+  }
 }
 
 class _PreviewScrollRect {
@@ -1258,6 +1332,7 @@ class PageThumb extends StatelessWidget {
   const PageThumb({
     required this.document,
     required this.pageNumber,
+    required this.imageHeight,
     required this.viewportPreview,
     required this.onTap,
     required this.onQuickExport,
@@ -1267,6 +1342,7 @@ class PageThumb extends StatelessWidget {
 
   final PdfDocument document;
   final int pageNumber;
+  final double imageHeight;
   final PageViewportPreview? viewportPreview;
   final VoidCallback onTap;
   final VoidCallback onQuickExport;
@@ -1277,7 +1353,8 @@ class PageThumb extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
+        SizedBox(
+          height: imageHeight,
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(6),
@@ -2702,6 +2779,7 @@ class RecentTile extends StatelessWidget {
   const RecentTile({
     required this.selected,
     required this.item,
+    required this.preview,
     required this.onTap,
     required this.onDelete,
     required this.onPdfContextMenu,
@@ -2713,6 +2791,7 @@ class RecentTile extends StatelessWidget {
 
   final bool selected;
   final RecentDocument item;
+  final PdfFirstPagePreviewData? preview;
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final void Function(PdfSource source, Offset position) onPdfContextMenu;
@@ -2782,7 +2861,7 @@ class RecentTile extends StatelessWidget {
           },
           borderRadius: BorderRadius.circular(8),
           child: Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: background,
               borderRadius: BorderRadius.circular(8),
@@ -2790,18 +2869,19 @@ class RecentTile extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 38,
-                  height: 46,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.accentSoft,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Icon(
-                    Icons.picture_as_pdf_outlined,
-                    color: AppColors.accent,
-                  ),
+                PdfFirstPagePreview(
+                  preview: preview,
+                  width: 74,
+                  height: 92,
+                  borderRadius: 7,
+                  padding: 4,
+                  backgroundColor: selected
+                      ? AppColors.surface
+                      : AppColors.accentSoft,
+                  borderColor: selected
+                      ? AppColors.accentLine
+                      : AppColors.line.withValues(alpha: 0.7),
+                  iconColor: AppColors.accent,
                 ),
                 const SizedBox(width: 12),
                 Expanded(

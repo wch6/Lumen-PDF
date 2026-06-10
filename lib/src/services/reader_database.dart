@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
@@ -110,6 +111,15 @@ CREATE INDEX IF NOT EXISTS idx_documents_updated_at
   ON documents(updated_at DESC);
 ''');
     _ensureColumn(_fileDb, 'documents', 'position_json', 'TEXT');
+    _ensureColumn(_fileDb, 'documents', 'first_page_preview_png', 'BLOB');
+    _ensureColumn(_fileDb, 'documents', 'first_page_preview_width', 'INTEGER');
+    _ensureColumn(_fileDb, 'documents', 'first_page_preview_height', 'INTEGER');
+    _ensureColumn(
+      _fileDb,
+      'documents',
+      'first_page_preview_updated_at',
+      'INTEGER',
+    );
     _ensureColumn(_fileDb, 'notes', 'x', 'REAL');
     _ensureColumn(_fileDb, 'notes', 'y', 'REAL');
     _ensureColumn(_fileDb, 'notes', 'highlight_id', 'TEXT');
@@ -134,7 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_updated_at
     }
   }
 
-  Future<List<RecentDocument>> loadRecent({int limit = 8}) async {
+  Future<List<RecentDocument>> loadRecent({int limit = 9}) async {
     final rows = _appDb.select(
       '''
 SELECT path, name, file_hash, size, last_page, position_json, opened_at
@@ -174,6 +184,61 @@ LIMIT 1
     final row = rows.first;
     return ReaderPosition.tryDecode(row['position_json']) ??
         ReaderPosition(page: row['last_page'] as int? ?? 1);
+  }
+
+  Future<PdfFirstPagePreviewData?> loadFirstPagePreview(String fileHash) async {
+    final previews = await loadFirstPagePreviews({fileHash});
+    return previews[fileHash];
+  }
+
+  Future<Map<String, PdfFirstPagePreviewData>> loadFirstPagePreviews(
+    Iterable<String> fileHashes,
+  ) async {
+    final hashes = fileHashes.where((hash) => hash.isNotEmpty).toSet();
+    if (hashes.isEmpty) {
+      return const {};
+    }
+    final placeholders = List.filled(hashes.length, '?').join(', ');
+    final rows = _fileDb.select('''
+SELECT hash, first_page_preview_png, first_page_preview_width,
+       first_page_preview_height, first_page_preview_updated_at
+FROM documents
+WHERE hash IN ($placeholders)
+  AND first_page_preview_png IS NOT NULL
+''', hashes.toList());
+    final previews = <String, PdfFirstPagePreviewData>{};
+    for (final row in rows) {
+      final preview = _decodeFirstPagePreview(row);
+      if (preview != null) {
+        previews[row['hash'] as String] = preview;
+      }
+    }
+    return previews;
+  }
+
+  Future<void> saveFirstPagePreview(
+    String fileHash,
+    PdfFirstPagePreviewData preview,
+  ) async {
+    _fileDb.execute(
+      '''
+UPDATE documents
+SET first_page_preview_png = ?,
+    first_page_preview_width = ?,
+    first_page_preview_height = ?,
+    first_page_preview_updated_at = ?,
+    updated_at = ?
+WHERE hash = ?
+''',
+      [
+        preview.pngBytes,
+        preview.width,
+        preview.height,
+        preview.updatedAt.millisecondsSinceEpoch,
+        preview.updatedAt.millisecondsSinceEpoch,
+        fileHash,
+      ],
+    );
   }
 
   Future<void> recordOpen({
@@ -505,6 +570,22 @@ WHERE file_hash IN ($placeholders);
     } catch (_) {
       return const [];
     }
+  }
+
+  PdfFirstPagePreviewData? _decodeFirstPagePreview(Row row) {
+    final bytes = row['first_page_preview_png'];
+    final width = row['first_page_preview_width'] as int?;
+    final height = row['first_page_preview_height'] as int?;
+    final updatedAt = row['first_page_preview_updated_at'];
+    if (bytes is! List<int> || width == null || height == null) {
+      return null;
+    }
+    return PdfFirstPagePreviewData(
+      pngBytes: bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+      width: width,
+      height: height,
+      updatedAt: _fromMillis(updatedAt),
+    );
   }
 
   void _rollback(Database db) {

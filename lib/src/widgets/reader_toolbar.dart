@@ -8,6 +8,7 @@ import 'package:pdfrx/pdfrx.dart';
 import '../assets/reader_icon_assets.dart';
 import '../models/reader_models.dart';
 import '../theme/app_colors.dart';
+import 'pdf_first_page_preview.dart';
 import 'shortcut_tooltip.dart';
 
 class ReaderToolbarMetrics {
@@ -29,7 +30,9 @@ class ReaderToolbar extends StatelessWidget {
     required this.viewerController,
     required this.shortcutBindings,
     required this.sessionTabs,
+    required this.firstPagePreviews,
     required this.currentSourceId,
+    required this.selectedTabIndex,
     required this.openTabsMenuTrigger,
     required this.closeTabsMenuTrigger,
     required this.onOpenTabsMenuChanged,
@@ -63,7 +66,9 @@ class ReaderToolbar extends StatelessWidget {
   final PdfViewerController viewerController;
   final Map<ReaderShortcutAction, ReaderShortcutBinding> shortcutBindings;
   final List<SessionDocumentTab> sessionTabs;
+  final Map<String, PdfFirstPagePreviewData> firstPagePreviews;
   final String? currentSourceId;
+  final int? selectedTabIndex;
   final int openTabsMenuTrigger;
   final int closeTabsMenuTrigger;
   final ValueChanged<bool> onOpenTabsMenuChanged;
@@ -194,7 +199,9 @@ class ReaderToolbar extends StatelessWidget {
                         ],
                         OpenTabsButton(
                           tabs: sessionTabs,
+                          firstPagePreviews: firstPagePreviews,
                           currentSourceId: currentSourceId,
+                          selectedIndex: selectedTabIndex,
                           openMenuTrigger: openTabsMenuTrigger,
                           closeMenuTrigger: closeTabsMenuTrigger,
                           shortcut: _shortcut(
@@ -321,7 +328,9 @@ class CurrentFileNamePill extends StatelessWidget {
 class OpenTabsButton extends StatefulWidget {
   const OpenTabsButton({
     required this.tabs,
+    required this.firstPagePreviews,
     required this.currentSourceId,
+    required this.selectedIndex,
     required this.openMenuTrigger,
     required this.closeMenuTrigger,
     required this.shortcut,
@@ -332,7 +341,9 @@ class OpenTabsButton extends StatefulWidget {
   });
 
   final List<SessionDocumentTab> tabs;
+  final Map<String, PdfFirstPagePreviewData> firstPagePreviews;
   final String? currentSourceId;
+  final int? selectedIndex;
   final int openMenuTrigger;
   final int closeMenuTrigger;
   final ReaderShortcutBinding? shortcut;
@@ -360,10 +371,14 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
 
   @override
   Widget build(BuildContext context) {
-    final menuWidth = math.min(
-      420.0,
-      math.max(284.0, MediaQuery.sizeOf(context).width * 0.38),
+    final windowSize = MediaQuery.sizeOf(context);
+    final availableMenuWidth = math.max(284.0, windowSize.width - 32);
+    final desiredMenuWidth = math.min(
+      560.0,
+      math.max(460.0, windowSize.width * 0.5),
     );
+    final menuWidth = math.min(availableMenuWidth, desiredMenuWidth);
+    final menuMaxHeight = math.max(360.0, windowSize.height - 32);
     return MenuAnchor(
       controller: _menuController,
       onOpen: () => widget.onOpenChanged(true),
@@ -381,11 +396,13 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
           constraints: BoxConstraints(
             minWidth: menuWidth,
             maxWidth: menuWidth,
-            maxHeight: 420,
+            maxHeight: menuMaxHeight,
           ),
           child: _OpenTabsMenu(
             tabs: widget.tabs,
+            firstPagePreviews: widget.firstPagePreviews,
             currentSourceId: widget.currentSourceId,
+            selectedIndex: widget.selectedIndex,
             onSelected: (tab) {
               widget.onSelected(tab);
               _menuController.close();
@@ -436,19 +453,28 @@ class _OpenTabsButtonState extends State<OpenTabsButton> {
 class _OpenTabsMenu extends StatelessWidget {
   const _OpenTabsMenu({
     required this.tabs,
+    required this.firstPagePreviews,
     required this.currentSourceId,
+    required this.selectedIndex,
     required this.onSelected,
     required this.onPdfContextMenu,
   });
 
   final List<SessionDocumentTab> tabs;
+  final Map<String, PdfFirstPagePreviewData> firstPagePreviews;
   final String? currentSourceId;
+  final int? selectedIndex;
   final ValueChanged<SessionDocumentTab> onSelected;
   final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   Widget build(BuildContext context) {
-    final tooltipMaxWidth = MediaQuery.sizeOf(context).width * 0.5;
+    final windowSize = MediaQuery.sizeOf(context);
+    final tooltipMaxWidth = windowSize.width * 0.5;
+    final listMaxHeight = math.min(
+      math.max(260.0, windowSize.height - 140),
+      tabs.length * 80.0 + math.max(0, tabs.length - 1) * 8.0,
+    );
     return Material(
       color: AppColors.surface,
       borderRadius: BorderRadius.circular(8),
@@ -486,12 +512,12 @@ class _OpenTabsMenu extends StatelessWidget {
               )
             else
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 320),
+                constraints: BoxConstraints(maxHeight: listMaxHeight),
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: tabs.length,
                   separatorBuilder: (_, _) => Divider(
-                    height: 12,
+                    height: 8,
                     color: AppColors.line.withValues(alpha: 0.65),
                   ),
                   itemBuilder: (context, index) {
@@ -501,8 +527,13 @@ class _OpenTabsMenu extends StatelessWidget {
                       constraints: BoxConstraints(maxWidth: tooltipMaxWidth),
                       child: _OpenTabTile(
                         tab: tab,
+                        preview: firstPagePreviews[tab.source.id],
                         shortcutIndex: index + 1,
-                        selected: tab.source.id == currentSourceId,
+                        selected:
+                            selectedIndex == index ||
+                            (selectedIndex == null &&
+                                tab.source.id == currentSourceId),
+                        current: tab.source.id == currentSourceId,
                         onTap: () => onSelected(tab),
                         onPdfContextMenu: onPdfContextMenu,
                       ),
@@ -520,47 +551,50 @@ class _OpenTabsMenu extends StatelessWidget {
 class _OpenTabTile extends StatelessWidget {
   const _OpenTabTile({
     required this.tab,
+    required this.preview,
     required this.shortcutIndex,
     required this.selected,
+    required this.current,
     required this.onTap,
     required this.onPdfContextMenu,
   });
 
   final SessionDocumentTab tab;
+  final PdfFirstPagePreviewData? preview;
   final int shortcutIndex;
   final bool selected;
+  final bool current;
   final VoidCallback onTap;
   final void Function(PdfSource source, Offset position) onPdfContextMenu;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: selected ? null : onTap,
+      onTap: current ? null : onTap,
       onSecondaryTapDown: (details) =>
           onPdfContextMenu(tab.source, details.globalPosition),
       borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: selected ? AppColors.accentSoft : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           children: [
-            Container(
-              width: 44,
-              height: 58,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.toolbarItem,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.line),
-              ),
-              child: Icon(
-                Icons.picture_as_pdf_outlined,
-                size: 24,
-                color: selected ? AppColors.accent : AppColors.subtle,
-              ),
+            PdfFirstPagePreview(
+              preview: preview,
+              width: 56,
+              height: 68,
+              borderRadius: 7,
+              padding: 3,
+              backgroundColor: selected
+                  ? AppColors.surface
+                  : AppColors.toolbarItem,
+              borderColor: selected ? AppColors.accentLine : AppColors.line,
+              iconColor: selected ? AppColors.accent : AppColors.subtle,
             ),
             const SizedBox(width: 12),
             Expanded(

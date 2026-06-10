@@ -10,6 +10,7 @@ class OpenedPdfState {
     required this.highlights,
     required this.page,
     this.position,
+    this.firstPagePreview,
   });
 
   final PdfSource source;
@@ -18,6 +19,7 @@ class OpenedPdfState {
   final List<TextHighlight> highlights;
   final int page;
   final ReaderPosition? position;
+  final PdfFirstPagePreviewData? firstPagePreview;
 }
 
 class ReaderRepository {
@@ -37,7 +39,7 @@ class ReaderRepository {
     database.dispose();
   }
 
-  Future<List<RecentDocument>> loadRecent({int limit = 8}) {
+  Future<List<RecentDocument>> loadRecent({int limit = 9}) {
     return database.loadRecent(limit: limit);
   }
 
@@ -66,6 +68,7 @@ class ReaderRepository {
       highlights: await database.loadHighlights(fileHash),
       page: effectivePage,
       position: effectivePosition,
+      firstPagePreview: await database.loadFirstPagePreview(fileHash),
     );
   }
 
@@ -103,6 +106,23 @@ class ReaderRepository {
   }
 
   Future<void> deleteRecent(String path) => database.deleteRecent(path);
+
+  Future<PdfFirstPagePreviewData?> loadFirstPagePreview(String fileHash) {
+    return database.loadFirstPagePreview(fileHash);
+  }
+
+  Future<Map<String, PdfFirstPagePreviewData>> loadFirstPagePreviews(
+    Iterable<String> fileHashes,
+  ) {
+    return database.loadFirstPagePreviews(fileHashes);
+  }
+
+  Future<void> saveFirstPagePreview(
+    String fileHash,
+    PdfFirstPagePreviewData preview,
+  ) {
+    return database.saveFirstPagePreview(fileHash, preview);
+  }
 
   Future<void> clearRecent() => database.clearRecent();
 

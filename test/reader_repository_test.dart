@@ -134,4 +134,31 @@ void main() {
       expect(reloaded.notes.single.text, 'updated');
     },
   );
+
+  test('repository persists first page previews by file hash', () async {
+    final repository = ReaderRepository(database: ReaderDatabase.inMemory());
+    addTearDown(repository.dispose);
+    final bytes = Uint8List.fromList([9, 8, 7]);
+
+    final opened = await repository.openSource(
+      PdfSource(name: 'preview.pdf', bytes: bytes, size: bytes.length),
+      initialPage: 1,
+    );
+    final preview = PdfFirstPagePreviewData(
+      pngBytes: Uint8List.fromList([1, 2, 3, 4]),
+      width: 120,
+      height: 160,
+      updatedAt: DateTime(2026, 6, 10),
+    );
+
+    await repository.saveFirstPagePreview(opened.source.hash!, preview);
+
+    final loaded = await repository.loadFirstPagePreview(opened.source.hash!);
+    final batch = await repository.loadFirstPagePreviews([opened.source.hash!]);
+
+    expect(loaded?.pngBytes, preview.pngBytes);
+    expect(loaded?.width, 120);
+    expect(loaded?.height, 160);
+    expect(batch[opened.source.hash!]?.pngBytes, preview.pngBytes);
+  });
 }

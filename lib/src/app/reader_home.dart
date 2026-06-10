@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,7 @@ import 'package:audioplayers/audioplayers.dart';
 import '../models/reader_models.dart';
 import '../services/export_image_encoder.dart';
 import '../services/file_saver.dart';
+import '../services/pdf_first_page_preview_renderer.dart';
 import '../services/reader_repository.dart';
 import '../services/reader_settings_store.dart';
 import '../services/translation_services.dart';
@@ -47,6 +49,7 @@ class ReaderHome extends StatefulWidget {
 
 class _ReaderHomeState extends State<ReaderHome> {
   static const _maxNoteHistoryDepth = 80;
+  static const _openTabsSelectionDelay = Duration(milliseconds: 500);
 
   final _viewerController = PdfViewerController();
   final _searchController = TextEditingController();
@@ -65,6 +68,7 @@ class _ReaderHomeState extends State<ReaderHome> {
   Timer? _messageTimer;
   Timer? _positionSaveTimer;
   Timer? _windowSizeSaveTimer;
+  Timer? _openTabsSelectionTimer;
   bool? _syncedTitleBarNightMode;
   bool _pointerInsideWindow = false;
   bool _globalShortcutsSuspended = false;
@@ -83,6 +87,8 @@ class _ReaderHomeState extends State<ReaderHome> {
   List<TextHighlight> _highlights = const [];
   List<RecentDocument> _recent = const [];
   List<SessionDocumentTab> _sessionTabs = const [];
+  Map<String, PdfFirstPagePreviewData> _firstPagePreviews = const {};
+  final Set<String> _firstPagePreviewRefreshes = {};
   ReaderPosition? _pendingOpenPosition;
   String? _translationSourceText;
   SelectionTranslationResult? _translationResult;
@@ -102,6 +108,7 @@ class _ReaderHomeState extends State<ReaderHome> {
   DateTime? _lastWindowTransitionAt;
   bool _compactPanelOpen = false;
   bool _openTabsMenuOpen = false;
+  int? _openTabsSelectionIndex;
   int _openTabsMenuTrigger = 0;
   int _closeTabsMenuTrigger = 0;
   int _highlightColorMenuTrigger = 0;
@@ -146,6 +153,7 @@ class _ReaderHomeState extends State<ReaderHome> {
     _messageTimer?.cancel();
     _positionSaveTimer?.cancel();
     _windowSizeSaveTimer?.cancel();
+    _openTabsSelectionTimer?.cancel();
     _messageEntry?.remove();
     _disposeTextSearcher();
     _searchController.dispose();
@@ -244,12 +252,17 @@ class _ReaderHomeState extends State<ReaderHome> {
   Future<void> _loadRecent() async {
     final repository = await _repo();
     final items = await repository.loadRecent();
+    final recent = items.take(9).toList();
+    final previews = await repository.loadFirstPagePreviews(
+      recent.map((item) => item.fileHash).nonNulls,
+    );
 
     if (!mounted) {
       return;
     }
     setState(() {
-      _recent = items.take(8).toList();
+      _recent = recent;
+      _firstPagePreviews = {..._firstPagePreviews, ...previews};
       _selectedRecentIndex = _clampedRecentIndex(_selectedRecentIndex, _recent);
       _loadingLibrary = false;
     });
@@ -467,6 +480,10 @@ class _ReaderHomeState extends State<ReaderHome> {
   }
 
   Future<void> _openRecent(RecentDocument recent) async {
+    if (!await File(recent.path).exists()) {
+      await _removeMissingRecent(recent);
+      return;
+    }
     await _openSource(
       PdfSource(name: recent.name, path: recent.path, size: recent.size),
       initialPage: recent.page,
@@ -474,12 +491,62 @@ class _ReaderHomeState extends State<ReaderHome> {
     );
   }
 
+  Future<void> _removeMissingRecent(RecentDocument item) async {
+    await (await _repo()).deleteRecent(item.path);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _recent = _recent.where((recent) => recent.path != item.path).toList();
+      _selectedRecentIndex = _clampedRecentIndex(_selectedRecentIndex, _recent);
+      _sessionTabs = _sessionTabs
+          .where((tab) => tab.source.path != item.path)
+          .toList();
+      _openTabsSelectionIndex = _validatedOpenTabsSelectionIndex();
+    });
+    _showMessage(
+      '\u6587\u4ef6\u4e0d\u5b58\u5728\uff0c\u5df2\u4ece\u6700\u8fd1\u6587\u4ef6\u79fb\u9664\u3002',
+    );
+  }
+
   Future<void> _openSessionTab(SessionDocumentTab tab) async {
+    _cancelOpenTabsSelectionTimer();
     await _openSource(
       tab.source,
       initialPage: tab.page,
       initialPosition: tab.position,
     );
+  }
+
+  Future<void> _refreshFirstPagePreview(PdfSource source) async {
+    final fileHash = source.hash;
+    if (fileHash == null ||
+        fileHash.isEmpty ||
+        !_firstPagePreviewRefreshes.add(fileHash)) {
+      return;
+    }
+    try {
+      final preview = await PdfFirstPagePreviewRenderer.render(source);
+      if (preview == null) {
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      final repository = await _repo();
+      await repository.saveFirstPagePreview(fileHash, preview);
+      final storedPreview = await repository.loadFirstPagePreview(fileHash);
+      if (!mounted || storedPreview == null) {
+        return;
+      }
+      setState(() {
+        _firstPagePreviews = {..._firstPagePreviews, fileHash: storedPreview};
+      });
+    } catch (_) {
+      return;
+    } finally {
+      _firstPagePreviewRefreshes.remove(fileHash);
+    }
   }
 
   Future<void> _openSource(
@@ -545,6 +612,16 @@ class _ReaderHomeState extends State<ReaderHome> {
         ),
         ..._sessionTabs.where((item) => item.source.id != resolved.id),
       ].take(9).toList();
+      if (_openTabsMenuOpen) {
+        _openTabsSelectionIndex = 0;
+      }
+      final firstPagePreview = opened.firstPagePreview;
+      if (firstPagePreview != null) {
+        _firstPagePreviews = {
+          ..._firstPagePreviews,
+          resolved.id: firstPagePreview,
+        };
+      }
     });
 
     _searchController.clear();
@@ -565,6 +642,7 @@ class _ReaderHomeState extends State<ReaderHome> {
     if (notesNeedSync) {
       unawaited(_saveNotes());
     }
+    unawaited(_refreshFirstPagePreview(resolved));
   }
 
   bool _isLoadedSource(PdfSource source) {
@@ -1116,9 +1194,9 @@ class _ReaderHomeState extends State<ReaderHome> {
       _closeTabsMenu();
       return true;
     }
-    final recentFileIndex = _recentFileShortcutIndex(event);
-    if (recentFileIndex != null) {
-      _openRecentFileFromMenu(recentFileIndex);
+    final sessionTabIndex = _sessionTabShortcutIndex(event);
+    if (sessionTabIndex != null) {
+      _openSessionTabFromMenu(sessionTabIndex);
       return true;
     }
     if (_handleLibraryRecentKeyEvent(event)) {
@@ -1136,7 +1214,7 @@ class _ReaderHomeState extends State<ReaderHome> {
     return true;
   }
 
-  int? _recentFileShortcutIndex(KeyEvent event) {
+  int? _sessionTabShortcutIndex(KeyEvent event) {
     if (!_openTabsMenuOpen) {
       return null;
     }
@@ -1151,6 +1229,10 @@ class _ReaderHomeState extends State<ReaderHome> {
     if (keyId >= LogicalKeyboardKey.digit1.keyId &&
         keyId <= LogicalKeyboardKey.digit9.keyId) {
       return keyId - LogicalKeyboardKey.digit1.keyId;
+    }
+    if (keyId >= LogicalKeyboardKey.numpad1.keyId &&
+        keyId <= LogicalKeyboardKey.numpad9.keyId) {
+      return keyId - LogicalKeyboardKey.numpad1.keyId;
     }
     return null;
   }
@@ -1565,6 +1647,7 @@ class _ReaderHomeState extends State<ReaderHome> {
         for (final item in _recent)
           item.copyWith(page: 1, fileHash: null, position: null),
       ];
+      _firstPagePreviews = const {};
       _selectedRecentIndex = _clampedRecentIndex(_selectedRecentIndex, _recent);
     });
     _resetNoteHistoryForSource(_source);
@@ -1587,6 +1670,9 @@ class _ReaderHomeState extends State<ReaderHome> {
               ? item.copyWith(page: 1, fileHash: null, position: null)
               : item,
       ];
+      _firstPagePreviews = Map<String, PdfFirstPagePreviewData>.of(
+        _firstPagePreviews,
+      )..removeWhere((hash, _) => hashes.contains(hash));
       _selectedRecentIndex = _clampedRecentIndex(_selectedRecentIndex, _recent);
       if (currentHash != null && hashes.contains(currentHash)) {
         _notes = const [];
@@ -1610,6 +1696,7 @@ class _ReaderHomeState extends State<ReaderHome> {
       _sessionTabs = _sessionTabs
           .where((tab) => tab.source.path != item.path)
           .toList();
+      _openTabsSelectionIndex = _validatedOpenTabsSelectionIndex();
     });
     _showMessage('已从最近文件移除。');
   }
@@ -1623,6 +1710,7 @@ class _ReaderHomeState extends State<ReaderHome> {
       _recent = const [];
       _selectedRecentIndex = 0;
       _sessionTabs = const [];
+      _openTabsSelectionIndex = null;
     });
     _showMessage('已清空最近文件。');
   }
@@ -2948,7 +3036,11 @@ class _ReaderHomeState extends State<ReaderHome> {
         _handleClearSearchOrHidePanel();
         break;
       case ReaderShortcutAction.openRecentFiles:
-        _openTabsMenu();
+        if (_openTabsMenuOpen) {
+          _openNextSessionTabFromMenu();
+        } else {
+          _openTabsMenu();
+        }
         break;
       case ReaderShortcutAction.selectHighlightColor:
         _openHighlightColorMenu();
@@ -3048,26 +3140,111 @@ class _ReaderHomeState extends State<ReaderHome> {
   }
 
   void _openTabsMenu() {
+    _cancelOpenTabsSelectionTimer();
     setState(() {
       _openTabsMenuTrigger++;
       _openTabsMenuOpen = true;
+      _openTabsSelectionIndex = _currentSessionTabIndex();
     });
   }
 
   void _closeTabsMenu() {
+    _cancelOpenTabsSelectionTimer();
     setState(() {
       _closeTabsMenuTrigger++;
       _openTabsMenuOpen = false;
+      _openTabsSelectionIndex = null;
     });
   }
 
-  void _openRecentFileFromMenu(int index) {
+  void _openNextSessionTabFromMenu() {
+    if (!_openTabsMenuOpen || _sessionTabs.length < 2) {
+      return;
+    }
+    final currentIndex =
+        _validatedOpenTabsSelectionIndex() ?? _currentSessionTabIndex() ?? 0;
+    _selectSessionTabFromMenu(
+      (currentIndex + 1) % _sessionTabs.length,
+      openAfterDelay: true,
+    );
+  }
+
+  void _openSessionTabFromMenu(int index) {
+    _selectSessionTabFromMenu(index, openAfterDelay: false);
+  }
+
+  void _selectSessionTabFromMenu(int index, {required bool openAfterDelay}) {
     if (!_openTabsMenuOpen || index < 0 || index >= _sessionTabs.length) {
       return;
     }
     final tab = _sessionTabs[index];
-    _closeTabsMenu();
-    unawaited(_openSessionTab(tab));
+    setState(() => _openTabsSelectionIndex = index);
+    if (openAfterDelay) {
+      _scheduleOpenSessionTabFromMenu(tab.source.id);
+    } else {
+      _cancelOpenTabsSelectionTimer();
+      unawaited(_openSessionTab(tab));
+      _closeTabsMenu();
+    }
+  }
+
+  void _scheduleOpenSessionTabFromMenu(String sourceId) {
+    _cancelOpenTabsSelectionTimer();
+    _openTabsSelectionTimer = Timer(_openTabsSelectionDelay, () {
+      _openTabsSelectionTimer = null;
+      if (!mounted || !_openTabsMenuOpen) {
+        return;
+      }
+      final index = _sessionTabs.indexWhere((tab) => tab.source.id == sourceId);
+      if (index < 0) {
+        return;
+      }
+      unawaited(_openSessionTab(_sessionTabs[index]));
+      _closeTabsMenu();
+    });
+  }
+
+  void _cancelOpenTabsSelectionTimer() {
+    _openTabsSelectionTimer?.cancel();
+    _openTabsSelectionTimer = null;
+  }
+
+  int? _currentSessionTabIndex() {
+    if (_sessionTabs.isEmpty) {
+      return null;
+    }
+    final index = _sessionTabs.indexWhere(
+      (item) => item.source.id == _source?.id,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  int? _validatedOpenTabsSelectionIndex() {
+    final index = _openTabsSelectionIndex;
+    if (index == null || index < 0 || index >= _sessionTabs.length) {
+      return null;
+    }
+    return index;
+  }
+
+  int? _selectedOpenTabsMenuIndex() {
+    return _validatedOpenTabsSelectionIndex() ?? _currentSessionTabIndex();
+  }
+
+  void _handleOpenTabsMenuChanged(bool open) {
+    _cancelOpenTabsSelectionTimer();
+    if (!mounted) {
+      return;
+    }
+    final nextSelectionIndex = open ? _currentSessionTabIndex() : null;
+    if (_openTabsMenuOpen == open &&
+        _openTabsSelectionIndex == nextSelectionIndex) {
+      return;
+    }
+    setState(() {
+      _openTabsMenuOpen = open;
+      _openTabsSelectionIndex = nextSelectionIndex;
+    });
   }
 
   void _openHighlightColorMenu() {
@@ -3106,10 +3283,12 @@ class _ReaderHomeState extends State<ReaderHome> {
       viewerController: _viewerController,
       shortcutBindings: _settings.shortcutBindings,
       sessionTabs: _sessionTabs,
+      firstPagePreviews: _firstPagePreviews,
       currentSourceId: _source?.id,
+      selectedTabIndex: _selectedOpenTabsMenuIndex(),
       openTabsMenuTrigger: _openTabsMenuTrigger,
       closeTabsMenuTrigger: _closeTabsMenuTrigger,
-      onOpenTabsMenuChanged: (open) => _openTabsMenuOpen = open,
+      onOpenTabsMenuChanged: _handleOpenTabsMenuChanged,
       onOpen: _pickPdf,
       onOpenTab: _openSessionTab,
       onPdfContextMenu: _showPdfContextMenu,
@@ -3154,6 +3333,7 @@ class _ReaderHomeState extends State<ReaderHome> {
       pageCount: _document?.pages.length ?? 0,
       jumpController: _jumpPageController,
       recent: _recent,
+      firstPagePreviews: _firstPagePreviews,
       selectedRecentIndex: _selectedRecentIndex,
       loadingLibrary: _loadingLibrary,
       textSearcher: _textSearcher,
